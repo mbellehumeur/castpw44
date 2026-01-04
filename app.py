@@ -490,17 +490,17 @@ async def clear_audit_log():
 async def get_slicer_icon():
     """Serve the 3D Slicer desktop icon"""
     import os
+    # First try root directory
+    icon_path = os.path.join(os.path.dirname(__file__), "3DSlicer-DesktopIcon.png")
+    if os.path.exists(icon_path):
+        from fastapi.responses import FileResponse
+        return FileResponse(icon_path, media_type="image/png")
+    # Fallback to Resources directory
     icon_path = os.path.join(os.path.dirname(__file__), "Resources", "docroot", "images", "3DSlicer-DesktopIcon.png")
     if os.path.exists(icon_path):
         from fastapi.responses import FileResponse
         return FileResponse(icon_path, media_type="image/png")
-    else:
-        # Fallback: try relative path from current working directory
-        fallback_path = os.path.join("Modules", "Scripted", "Cast", "Resources", "docroot", "images", "3DSlicer-DesktopIcon.png")
-        if os.path.exists(fallback_path):
-            from fastapi.responses import FileResponse
-            return FileResponse(fallback_path, media_type="image/png")
-        raise HTTPException(status_code=404, detail="Icon not found")
+    raise HTTPException(status_code=404, detail="Icon not found")
 
 
 @app.get("/favicon.ico")

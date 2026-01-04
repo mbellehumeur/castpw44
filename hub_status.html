@@ -3,7 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Cast Hub Status</title>
+    <title>3D Slicer Hub Status</title>
+    <link rel="icon" type="image/x-icon" href="/favicon.ico">
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
@@ -12,7 +13,7 @@
             background-color: #f5f5f5;
         }
         .container {
-            max-width: 1200px;
+            max-width: 1400px;
             margin: 0 auto;
             background: white;
             padding: 30px;
@@ -22,6 +23,12 @@
         h1 {
             color: #333;
             margin-top: 0;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        h1 img {
+            height: 40px;
         }
         .stats {
             display: grid;
@@ -55,6 +62,10 @@
             padding: 12px;
             text-align: left;
             border-bottom: 1px solid #ddd;
+        }
+        .audit-log table th,
+        .audit-log table td {
+            padding: 6px 12px;
         }
         th {
             background-color: #f8f9fa;
@@ -93,6 +104,7 @@
             text-align: center;
             padding: 40px;
             color: #999;
+            font-style: italic;
         }
         .controls {
             margin: 20px 0;
@@ -127,14 +139,101 @@
             border-radius: 4px;
             margin: 10px 0;
         }
+        .audit-log {
+            margin-top: 30px;
+            padding-top: 30px;
+            border-top: 2px solid #e0e0e0;
+        }
+        .filters {
+            margin: 15px 0;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-radius: 6px;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .filters select {
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+            min-width: 150px;
+            background-color: white;
+        }
+        .filters button {
+            padding: 8px 16px;
+            background-color: #28a745;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        .filters button:hover {
+            background-color: #218838;
+        }
+        .filters button.danger {
+            background-color: #dc3545;
+        }
+        .filters button.danger:hover {
+            background-color: #c82333;
+        }
+        .event-name {
+            color: #007bff;
+            cursor: pointer;
+            text-decoration: underline;
+        }
+        .event-name:hover {
+            color: #0056b3;
+        }
+        .event-details {
+            display: none;
+            margin-top: 10px;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-left: 3px solid #007bff;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 12px;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            color: #333;
+        }
+        .event-details.show {
+            display: block;
+        }
+        .timestamp {
+            color: #666;
+            font-size: 12px;
+        }
+        .direction {
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .direction-received {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .direction-sent {
+            background-color: #cce5ff;
+            color: #004085;
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>Cast Hub Status</h1>
+        <h1>
+            <img src="/images/3DSlicer-DesktopIcon.png" alt="3D Slicer" onerror="this.style.display='none'">
+            3D Slicer Hub Status
+        </h1>
         
         <div class="controls">
-            <button onclick="loadStatus()">Refresh Now</button>
+            <button onclick="refreshAll()">Refresh Now</button>
             <span class="last-updated" id="lastUpdated"></span>
         </div>
 
@@ -157,6 +256,23 @@
 
         <h2>Active Subscriptions</h2>
         <div id="subscriptionsTable"></div>
+
+        <div class="audit-log">
+            <h2>Audit Log</h2>
+            <div class="filters">
+                <select id="userFilter">
+                    <option value="">All Users</option>
+                </select>
+                <select id="topicFilter">
+                    <option value="">All Topics</option>
+                </select>
+                <button onclick="loadAuditLog()">Filter</button>
+                <button class="danger" onclick="clearAuditLog()">Clear Audit Log</button>
+            </div>
+            <div id="auditLogTable">
+                <p>Loading audit log...</p>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -171,28 +287,13 @@
                 }
                 const data = await response.json();
                 
-                // Update stats
                 document.getElementById('totalSubscriptions').textContent = data.total_subscriptions || 0;
                 document.getElementById('totalWebsockets').textContent = data.total_websockets || 0;
                 document.getElementById('totalTopics').textContent = data.total_topics || 0;
                 
-                // Update subscriptions table
                 const tableDiv = document.getElementById('subscriptionsTable');
                 if (data.subscriptions && data.subscriptions.length > 0) {
-                    let tableHTML = `
-                        <table>
-                            <thead>
-                                <tr>
-                                    <th>Subscriber</th>
-                                    <th>Topic</th>
-                                    <th>Channel</th>
-                                    <th>Endpoint</th>
-                                    <th>Events</th>
-                                    <th>Created</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                    `;
+                    let tableHTML = '<table><thead><tr><th>Subscriber</th><th>Topic</th><th>Channel</th><th>Endpoint</th><th>Events</th><th>Created</th></tr></thead><tbody>';
                     
                     data.subscriptions.forEach(sub => {
                         const channelClass = sub.channel === 'websocket' ? 'channel-websocket' : 'channel-websub';
@@ -214,14 +315,111 @@
                     tableDiv.innerHTML = '<div class="no-subscriptions">No active subscriptions</div>';
                 }
                 
-                // Update last updated time
-                document.getElementById('lastUpdated').textContent = 
-                    'Last updated: ' + new Date().toLocaleTimeString();
+                document.getElementById('lastUpdated').textContent = 'Last updated: ' + new Date().toLocaleTimeString();
                 
             } catch (error) {
                 errorDiv.innerHTML = `<div class="error">Error loading status: ${escapeHtml(error.message)}</div>`;
                 console.error('Error loading status:', error);
             }
+        }
+
+        async function loadAuditLog() {
+            const userFilter = document.getElementById('userFilter').value;
+            const topicFilter = document.getElementById('topicFilter').value;
+            
+            let url = '/api/audit-log?';
+            if (userFilter) url += 'user=' + encodeURIComponent(userFilter) + '&';
+            if (topicFilter) url += 'topic=' + encodeURIComponent(topicFilter) + '&';
+            
+            try {
+                const response = await fetch(url);
+                const data = await response.json();
+                updateDropdowns(data.unique_users || [], data.unique_topics || []);
+                displayAuditLog(data.entries || []);
+            } catch (error) {
+                console.error('Error loading audit log:', error);
+                document.getElementById('auditLogTable').innerHTML = '<p class="error">Error loading audit log</p>';
+            }
+        }
+        
+        function updateDropdowns(users, topics) {
+            const userSelect = document.getElementById('userFilter');
+            const topicSelect = document.getElementById('topicFilter');
+            const currentUser = userSelect.value;
+            const currentTopic = topicSelect.value;
+            
+            userSelect.innerHTML = '<option value="">All Users</option>';
+            users.forEach(user => {
+                if (user) {
+                    const option = document.createElement('option');
+                    option.value = user;
+                    option.textContent = user;
+                    if (user === currentUser) option.selected = true;
+                    userSelect.appendChild(option);
+                }
+            });
+            
+            topicSelect.innerHTML = '<option value="">All Topics</option>';
+            topics.forEach(topic => {
+                if (topic) {
+                    const option = document.createElement('option');
+                    option.value = topic;
+                    option.textContent = topic;
+                    if (topic === currentTopic) option.selected = true;
+                    topicSelect.appendChild(option);
+                }
+            });
+        }
+        
+        async function clearAuditLog() {
+            if (!confirm('Are you sure you want to clear the audit log?')) return;
+            
+            try {
+                await fetch('/api/audit-log', { method: 'DELETE' });
+                loadAuditLog();
+            } catch (error) {
+                console.error('Error clearing audit log:', error);
+                alert('Error clearing audit log');
+            }
+        }
+        
+        function displayAuditLog(entries) {
+            const tableDiv = document.getElementById('auditLogTable');
+            
+            if (entries.length === 0) {
+                tableDiv.innerHTML = '<div class="no-subscriptions">No audit log entries found</div>';
+                return;
+            }
+            
+            let html = '<table><thead><tr><th>Timestamp</th><th>Direction</th><th>User</th><th>Topic</th><th>Event Name</th></tr></thead><tbody>';
+            
+            entries.forEach((entry, index) => {
+                const date = new Date(entry.timestamp);
+                const timestamp = date.toLocaleString() + '.' + date.getMilliseconds().toString().padStart(3, '0');
+                const direction = entry.direction || 'received';
+                const eventData = JSON.stringify(entry.event_data, null, 2);
+                
+                html += `<tr>
+                    <td class="timestamp">${escapeHtml(timestamp)}</td>
+                    <td><span class="direction direction-${direction}">${escapeHtml(direction)}</span></td>
+                    <td>${escapeHtml(entry.user || 'N/A')}</td>
+                    <td class="topic">${escapeHtml(entry.topic || 'N/A')}</td>
+                    <td><span class="event-name" onclick="toggleEventDetails(${index})">${escapeHtml(entry.event_name || 'N/A')}</span></td>
+                </tr>
+                <tr>
+                    <td colspan="5">
+                        <div class="event-details" id="eventDetails${index}">${escapeHtml(eventData)}</div>
+                    </td>
+                </tr>`;
+            });
+            
+            html += '</tbody></table>';
+            tableDiv.innerHTML = html;
+        }
+        
+        function toggleEventDetails(index) {
+            const detailsDiv = document.getElementById('eventDetails' + index);
+            if (detailsDiv) detailsDiv.classList.toggle('show');
         }
         
         function escapeHtml(text) {
@@ -230,12 +428,13 @@
             return div.innerHTML;
         }
         
-        // Load status on page load
-        loadStatus();
+        function refreshAll() {
+            loadStatus();
+            loadAuditLog();
+        }
         
-        // Auto-refresh is OFF - user must click "Refresh Now" to update
-        // To enable auto-refresh every 5 seconds, uncomment the line below:
-        // setInterval(loadStatus, 5000);
+        loadStatus();
+        loadAuditLog();
     </script>
 </body>
 </html>
