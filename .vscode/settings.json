@@ -1,0 +1,4 @@
+{
+    "appService.defaultWebAppToDeploy": "/subscriptions/fc54a6e8-fb2d-4ac5-bbc6-e9cd2eaf0055/resourceGroups/appsvc_linux_westeurope_basic/providers/Microsoft.Web/sites/cast-hub",
+    "appService.deploySubpath": "."
+}

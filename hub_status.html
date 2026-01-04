@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cast Hub Status</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            margin-top: 0;
+        }
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin: 20px 0;
+        }
+        .stat-card {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 6px;
+            border-left: 4px solid #007bff;
+        }
+        .stat-card h3 {
+            margin: 0 0 10px 0;
+            color: #666;
+            font-size: 14px;
+            font-weight: normal;
+        }
+        .stat-card .value {
+            font-size: 32px;
+            font-weight: bold;
+            color: #333;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+        th {
+            background-color: #f8f9fa;
+            font-weight: 600;
+            color: #333;
+        }
+        tr:hover {
+            background-color: #f8f9fa;
+        }
+        .channel {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .channel-websocket {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .channel-websub {
+            background-color: #cce5ff;
+            color: #004085;
+        }
+        .endpoint {
+            font-family: monospace;
+            font-size: 12px;
+            color: #666;
+            word-break: break-all;
+        }
+        .topic {
+            font-weight: 500;
+            color: #007bff;
+        }
+        .no-subscriptions {
+            text-align: center;
+            padding: 40px;
+            color: #999;
+        }
+        .controls {
+            margin: 20px 0;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        button {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            background-color: #007bff;
+            color: white;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+        .last-updated {
+            color: #666;
+            font-size: 14px;
+        }
+        .error {
+            background-color: #f8d7da;
+            color: #721c24;
+            padding: 12px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Cast Hub Status</h1>
+        
+        <div class="controls">
+            <button onclick="loadStatus()">Refresh Now</button>
+            <span class="last-updated" id="lastUpdated"></span>
+        </div>
+
+        <div id="errorMessage"></div>
+
+        <div class="stats">
+            <div class="stat-card">
+                <h3>Total Subscriptions</h3>
+                <div class="value" id="totalSubscriptions">-</div>
+            </div>
+            <div class="stat-card">
+                <h3>Active WebSockets</h3>
+                <div class="value" id="totalWebsockets">-</div>
+            </div>
+            <div class="stat-card">
+                <h3>Active Topics</h3>
+                <div class="value" id="totalTopics">-</div>
+            </div>
+        </div>
+
+        <h2>Active Subscriptions</h2>
+        <div id="subscriptionsTable"></div>
+    </div>
+
+    <script>
+        async function loadStatus() {
+            const errorDiv = document.getElementById('errorMessage');
+            errorDiv.innerHTML = '';
+            
+            try {
+                const response = await fetch('/api/hub/status');
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                const data = await response.json();
+                
+                // Update stats
+                document.getElementById('totalSubscriptions').textContent = data.total_subscriptions || 0;
+                document.getElementById('totalWebsockets').textContent = data.total_websockets || 0;
+                document.getElementById('totalTopics').textContent = data.total_topics || 0;
+                
+                // Update subscriptions table
+                const tableDiv = document.getElementById('subscriptionsTable');
+                if (data.subscriptions && data.subscriptions.length > 0) {
+                    let tableHTML = `
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Subscriber</th>
+                                    <th>Topic</th>
+                                    <th>Channel</th>
+                                    <th>Endpoint</th>
+                                    <th>Events</th>
+                                    <th>Created</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                    `;
+                    
+                    data.subscriptions.forEach(sub => {
+                        const channelClass = sub.channel === 'websocket' ? 'channel-websocket' : 'channel-websub';
+                        tableHTML += `
+                            <tr>
+                                <td>${escapeHtml(sub.subscriber || 'unknown')}</td>
+                                <td class="topic">${escapeHtml(sub.topic || 'unknown')}</td>
+                                <td><span class="channel ${channelClass}">${escapeHtml(sub.channel || 'websub')}</span></td>
+                                <td class="endpoint">${escapeHtml(sub.endpoint || 'N/A')}</td>
+                                <td>${escapeHtml(sub.events || 'all')}</td>
+                                <td>${escapeHtml(sub.created || 'unknown')}</td>
+                            </tr>
+                        `;
+                    });
+                    
+                    tableHTML += '</tbody></table>';
+                    tableDiv.innerHTML = tableHTML;
+                } else {
+                    tableDiv.innerHTML = '<div class="no-subscriptions">No active subscriptions</div>';
+                }
+                
+                // Update last updated time
+                document.getElementById('lastUpdated').textContent = 
+                    'Last updated: ' + new Date().toLocaleTimeString();
+                
+            } catch (error) {
+                errorDiv.innerHTML = `<div class="error">Error loading status: ${escapeHtml(error.message)}</div>`;
+                console.error('Error loading status:', error);
+            }
+        }
+        
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+        
+        // Load status on page load
+        loadStatus();
+        
+        // Auto-refresh is OFF - user must click "Refresh Now" to update
+        // To enable auto-refresh every 5 seconds, uncomment the line below:
+        // setInterval(loadStatus, 5000);
+    </script>
+</body>
+</html>
