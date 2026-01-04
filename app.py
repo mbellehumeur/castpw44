@@ -61,6 +61,7 @@ class CastHub:
         self.conferences: List[Dict] = []
         self.last_context: Dict[str, Dict] = {}  # topic -> context
         self.audit_log: List[Dict] = []  # List of logged events
+        self.audit_log_counter: int = 0  # Incrementing message number
         self.server_port = 2017
         self.user_count = 0
         self.page_loads = 0
@@ -250,7 +251,9 @@ class CastHub:
             event_data: Event data/context
             direction: "received" or "sent"
         """
+        self.audit_log_counter += 1
         log_entry = {
+            "message_number": self.audit_log_counter,
             "timestamp": datetime.now().isoformat(),
             "user": user,
             "topic": topic,
@@ -460,6 +463,7 @@ async def get_hub_status_json():
         "total_subscriptions": len(subscriptions),
         "total_websockets": len(cast_hub.websocket_connections),
         "total_topics": len(set(sub.get("topic") for sub in subscriptions if sub.get("topic"))),
+        "total_messages": len(cast_hub.audit_log),
         "subscriptions": subscriptions,
         "websocket_endpoints": list(cast_hub.websocket_connections.keys()),
         "topics": list(set(sub.get("topic") for sub in subscriptions if sub.get("topic")))

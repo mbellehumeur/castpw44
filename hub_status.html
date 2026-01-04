@@ -252,13 +252,27 @@
                 <h3>Active Topics</h3>
                 <div class="value" id="totalTopics">-</div>
             </div>
+            <div class="stat-card">
+                <h3>Active Conferences</h3>
+                <div class="value" id="totalConferences">-</div>
+            </div>
+            <div class="stat-card">
+                <h3>Total Messages</h3>
+                <div class="value" id="totalMessages">-</div>
+            </div>
         </div>
 
         <h2>Active Subscriptions</h2>
         <div id="subscriptionsTable"></div>
 
+        <h2>Active Conferences</h2>
+        <div id="conferencesTable"></div>
+
         <div class="audit-log">
-            <h2>Audit Log</h2>
+            <h2>
+                Audit Log
+                <button onclick="loadAuditLog()" style="margin-left: 10px; font-size: 0.8em; padding: 5px 10px;">Refresh</button>
+            </h2>
             <div class="filters">
                 <select id="userFilter">
                     <option value="">All Users</option>
@@ -290,6 +304,7 @@
                 document.getElementById('totalSubscriptions').textContent = data.total_subscriptions || 0;
                 document.getElementById('totalWebsockets').textContent = data.total_websockets || 0;
                 document.getElementById('totalTopics').textContent = data.total_topics || 0;
+                document.getElementById('totalMessages').textContent = data.total_messages || 0;
                 
                 const tableDiv = document.getElementById('subscriptionsTable');
                 if (data.subscriptions && data.subscriptions.length > 0) {
@@ -315,11 +330,56 @@
                     tableDiv.innerHTML = '<div class="no-subscriptions">No active subscriptions</div>';
                 }
                 
+                // Load conferences
+                loadConferences();
+                
                 document.getElementById('lastUpdated').textContent = 'Last updated: ' + new Date().toLocaleTimeString();
                 
             } catch (error) {
                 errorDiv.innerHTML = `<div class="error">Error loading status: ${escapeHtml(error.message)}</div>`;
                 console.error('Error loading status:', error);
+            }
+        }
+
+        async function loadConferences() {
+            try {
+                const response = await fetch('/conference');
+                const conferences = await response.json();
+                
+                const tableDiv = document.getElementById('conferencesTable');
+                if (conferences && conferences.length > 0) {
+                    // Update conference count
+                    const totalConferencesElement = document.getElementById('totalConferences');
+                    if (totalConferencesElement) {
+                        totalConferencesElement.textContent = conferences.length;
+                    }
+                    
+                    let tableHTML = '<table><thead><tr><th>Title</th><th>User</th><th>Topics</th></tr></thead><tbody>';
+                    
+                    conferences.forEach(conf => {
+                        const topics = (conf.topics || []).join(', ');
+                        tableHTML += `
+                            <tr>
+                                <td>${escapeHtml(conf.title || 'N/A')}</td>
+                                <td>${escapeHtml(conf.user || 'N/A')}</td>
+                                <td class="topic">${escapeHtml(topics || 'None')}</td>
+                            </tr>
+                        `;
+                    });
+                    
+                    tableHTML += '</tbody></table>';
+                    tableDiv.innerHTML = tableHTML;
+                } else {
+                    // Update conference count to 0
+                    const totalConferencesElement = document.getElementById('totalConferences');
+                    if (totalConferencesElement) {
+                        totalConferencesElement.textContent = '0';
+                    }
+                    tableDiv.innerHTML = '<div class="no-subscriptions">No active conferences</div>';
+                }
+            } catch (error) {
+                console.error('Error loading conferences:', error);
+                document.getElementById('conferencesTable').innerHTML = '<div class="no-subscriptions">Error loading conferences</div>';
             }
         }
 
@@ -391,15 +451,17 @@
                 return;
             }
             
-            let html = '<table><thead><tr><th>Timestamp</th><th>Direction</th><th>User</th><th>Topic</th><th>Event Name</th></tr></thead><tbody>';
+            let html = '<table><thead><tr><th>#</th><th>Timestamp</th><th>Direction</th><th>User</th><th>Topic</th><th>Event Name</th></tr></thead><tbody>';
             
             entries.forEach((entry, index) => {
                 const date = new Date(entry.timestamp);
                 const timestamp = date.toLocaleString() + '.' + date.getMilliseconds().toString().padStart(3, '0');
                 const direction = entry.direction || 'received';
                 const eventData = JSON.stringify(entry.event_data, null, 2);
+                const msgNum = entry.message_number || '-';
                 
                 html += `<tr>
+                    <td>${escapeHtml(msgNum.toString())}</td>
                     <td class="timestamp">${escapeHtml(timestamp)}</td>
                     <td><span class="direction direction-${direction}">${escapeHtml(direction)}</span></td>
                     <td>${escapeHtml(entry.user || 'N/A')}</td>
