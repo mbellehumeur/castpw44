@@ -75,6 +75,8 @@ class CastHub:
         self.page_loads = 0
         self.app_logs: List[str] = []  # Store recent logs
         self.max_logs = 100  # Keep last 100 log entries
+        self.last_admin_refresh_time: float = 0.0  # Track last admin refresh time for rate limiting
+        self.pending_admin_refresh_task = None  # Track pending refresh task (to cancel if needed)
     
     def log(self, message: str):
         """Add a log message to the in-memory log buffer"""
@@ -261,10 +263,13 @@ class CastHub:
             self.admin_websockets.remove(websocket)
             self.log(f"Admin WebSocket unregistered (remaining: {len(self.admin_websockets)})")
     
-    async def send_admin_refresh_command(self):
-        """Send refresh command to all connected admin clients"""
+    async def _do_send_admin_refresh(self):
+        """Internal method to actually send the refresh command"""
         if not self.admin_websockets:
             return
+        
+        import time
+        self.last_admin_refresh_time = time.time()
         
         message = {
             "type": "refresh",
@@ -283,6 +288,42 @@ class CastHub:
         # Clean up disconnected websockets
         for ws in disconnected:
             self.unregister_admin_websocket(ws)
+    
+    async def send_admin_refresh_command(self):
+        """Send refresh command to all connected admin clients (rate limited to max 1 per 2 seconds)
+        If rate limited, schedules a delayed send. Only the last suppressed refresh will be sent.
+        """
+        if not self.admin_websockets:
+            return
+        
+        import time
+        import asyncio
+        current_time = time.time()
+        time_since_last = current_time - self.last_admin_refresh_time
+        
+        # If enough time has passed (>= 2 seconds), send immediately
+        if time_since_last >= 2.0:
+            # Cancel any pending task since we're sending now
+            if self.pending_admin_refresh_task and not self.pending_admin_refresh_task.done():
+                self.pending_admin_refresh_task.cancel()
+                self.pending_admin_refresh_task = None
+            
+            await self._do_send_admin_refresh()
+        else:
+            # Rate limited - cancel any existing pending task and schedule a new one
+            # This ensures only the last suppressed refresh is sent
+            if self.pending_admin_refresh_task and not self.pending_admin_refresh_task.done():
+                self.pending_admin_refresh_task.cancel()
+            
+            # Schedule to send after remaining time (2.0 - time_since_last)
+            delay = 2.0 - time_since_last
+            
+            async def delayed_send():
+                await asyncio.sleep(delay)
+                await self._do_send_admin_refresh()
+                self.pending_admin_refresh_task = None
+            
+            self.pending_admin_refresh_task = asyncio.create_task(delayed_send())
     
     def add_audit_log(self, user: str, topic: str, event_name: str, event_data: Dict, direction: str = "received"):
         """Add an entry to the audit log
@@ -657,6 +698,9 @@ async def post_hub(request: Request):
                 )
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        # Send admin refresh command (rate limited)
+        await cast_hub.send_admin_refresh_command()
 
 
 @app.post("/api/hub/{topic}")
@@ -796,6 +840,9 @@ async def post_hub_topic(topic: str, request: Request):
     except Exception as e:
         print(f"[LOG] Error handling event: {e}")
         raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        # Send admin refresh command (rate limited)
+        await cast_hub.send_admin_refresh_command()
 
 
 @app.delete("/api/hub/")
