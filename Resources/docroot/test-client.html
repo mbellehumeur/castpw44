@@ -164,6 +164,14 @@
             <h2>Subscribe</h2>
             <div style="display: flex; align-items: flex-end; gap: 15px; flex-wrap: wrap; margin-bottom: 15px;">
                 <div class="form-group" style="flex: 1; min-width: 150px; margin-bottom: 0;">
+                    <label for="hubSelect">Hub:</label>
+                    <select id="hubSelect" style="width: 100%;">
+                        <option value="local">local</option>
+                        <option value="SLICER-HUB">3D Slicer Cast Hub</option>
+                        <option value="MEDPLUM">Medplum FHIRCast hub</option>
+                    </select>
+                </div>
+                <div class="form-group" style="flex: 1; min-width: 150px; margin-bottom: 0;">
                     <label for="topic">Topic:</label>
                     <input type="text" id="topic" value="test-topic" placeholder="Enter topic name">
                 </div>
@@ -194,14 +202,51 @@
             </div>
             <div class="form-group">
                 <label for="eventType">Event Type:</label>
-                <input type="text" id="eventType" value="update" placeholder="e.g., update, close, open">
+                <input type="text" id="eventType" list="eventTypeOptions" value="imagingstudy-open" placeholder="e.g., imagingstudy-open, imagingstudy-close">
+                <datalist id="eventTypeOptions">
+                    <option value="imagingstudy-open">
+                    <option value="imagingstudy-close">
+                </datalist>
             </div>
             <div class="form-group">
                 <label for="eventData">Event Data (JSON):</label>
-                <textarea id="eventData" placeholder='{"key": "value"}'>{
-  "message": "Hello from test client",
-  "timestamp": "2024-01-01T00:00:00Z"
-}</textarea>
+                <textarea id="eventData" placeholder='{"key": "value"}'>[
+  {
+    "key": "patient",
+    "resource": {
+      "resourceType": "Patient",
+      "id": "NEW_PATIENT_ID",
+      "identifier": [
+        {
+          "system": "urn:oid:2.16.840.1.113883.4.2",
+          "value": "NEW_PATIENT_ID"
+        }
+      ],
+      "name": [
+        {
+          "text": [
+            {
+              "Alphabetic": "CTA Head and Neck"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "key": "study",
+    "resource": {
+      "resourceType": "ImagingStudy",
+      "id": "2.16.840.1.114362.1.11972228.22789312658.616067305.306.2",
+      "uid": "urn:oid:2.16.840.1.114362.1.11972228.22789312658.616067305.306.2",
+      "identifier": [],
+      "patient": {
+        "reference": "Patient/NEW_PATIENT_ID"
+      },
+      "status": "available"
+    }
+  }
+]</textarea>
             </div>
             <button id="publishBtn" onclick="publish()">Publish</button>
             
@@ -219,6 +264,19 @@
         let websocket = null;
         let websocketUrl = null;
         let subscribed = false;
+
+        // Hub configuration
+        const hubConfigs = {
+            'local': '/api/hub/',
+            'SLICER-HUB': 'http://localhost:2016/api/hub',
+            'MEDPLUM': 'https://api.medplum.staging.radai.com/fhircast/STU3'
+        };
+
+        function getHubEndpoint() {
+            const hubSelect = document.getElementById('hubSelect');
+            const selectedHub = hubSelect.value;
+            return hubConfigs[selectedHub] || hubConfigs['local'];
+        }
 
         function addMessage(type, content, label = '') {
             const messagesDiv = document.getElementById('messages');
@@ -260,6 +318,7 @@
             const topic = document.getElementById('topic').value.trim();
             const subscriberName = document.getElementById('subscriberName').value.trim();
             const events = document.getElementById('events').value.trim();
+            const hubEndpoint = getHubEndpoint();
 
             if (!topic || !subscriberName) {
                 showStatus('subscribeStatus', 'Topic and Subscriber Name are required', true);
@@ -277,7 +336,7 @@
                 subscribeFormData.append('hub.lease', '7200');
                 subscribeFormData.append('subscriber.name', subscriberName);
 
-                const response = await fetch('/api/hub/', {
+                const response = await fetch(hubEndpoint, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/x-www-form-urlencoded'
@@ -296,20 +355,38 @@
                     }
 
                     // Normalize WebSocket URL to use correct domain (like reference code)
+                    // For local hub, normalize to use current origin. For remote hubs, use URL as-is.
                     let normalizedWebsocketUrl = websocketUrl;
-                    try {
-                        const hubEndpointUrl = new URL(window.location.origin);
-                        const websocketUrlObj = new URL(websocketUrl);
-                        
-                        // Replace the domain/host with the one from current origin
-                        // Convert http/https to ws/wss
-                        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-                        normalizedWebsocketUrl = websocketUrl.replace(
-                            websocketUrlObj.origin,
-                            `${wsProtocol}//${hubEndpointUrl.host}`
-                        );
-                    } catch (err) {
-                        console.warn('Could not normalize WebSocket URL, using original:', err);
+                    const hubSelect = document.getElementById('hubSelect');
+                    const selectedHub = hubSelect.value;
+                    
+                    if (selectedHub === 'local') {
+                        try {
+                            const hubEndpointUrl = new URL(window.location.origin);
+                            const websocketUrlObj = new URL(websocketUrl);
+                            
+                            // Replace the domain/host with the one from current origin
+                            // Convert http/https to ws/wss
+                            const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                            normalizedWebsocketUrl = websocketUrl.replace(
+                                websocketUrlObj.origin,
+                                `${wsProtocol}//${hubEndpointUrl.host}`
+                            );
+                        } catch (err) {
+                            console.warn('Could not normalize WebSocket URL, using original:', err);
+                        }
+                    } else {
+                        // For remote hubs, convert http/https to ws/wss if needed
+                        try {
+                            const websocketUrlObj = new URL(websocketUrl);
+                            if (websocketUrlObj.protocol === 'http:') {
+                                normalizedWebsocketUrl = websocketUrl.replace('http://', 'ws://');
+                            } else if (websocketUrlObj.protocol === 'https:') {
+                                normalizedWebsocketUrl = websocketUrl.replace('https://', 'wss://');
+                            }
+                        } catch (err) {
+                            console.warn('Could not process WebSocket URL, using original:', err);
+                        }
                     }
 
                     addMessage('sent', `Subscribed to topic: ${topic}`, 'Subscribe');
@@ -400,6 +477,7 @@
                 const topic = document.getElementById('topic').value.trim();
                 const subscriberName = document.getElementById('subscriberName').value.trim();
                 const events = document.getElementById('events').value.trim();
+                const hubEndpoint = getHubEndpoint();
 
                 // Use URLSearchParams to match reference implementation
                 const subscribeFormData = new URLSearchParams();
@@ -411,7 +489,7 @@
                 subscribeFormData.append('hub.lease', '7200');
                 subscribeFormData.append('subscriber.name', subscriberName);
 
-                const response = await fetch('/api/hub/', {
+                const response = await fetch(hubEndpoint, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/x-www-form-urlencoded'
