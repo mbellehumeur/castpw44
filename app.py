@@ -31,6 +31,7 @@ try:
     from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Response, HTTPException
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import JSONResponse
+    from fastapi.staticfiles import StaticFiles
     import uvicorn
     HAS_FASTAPI = True
 except ImportError:
@@ -50,6 +51,12 @@ app.add_middleware(
     expose_headers=["*"],
     max_age=3600,
 )
+
+# Mount static files directory
+base_dir = os.path.dirname(os.path.abspath(__file__))
+static_dir = os.path.join(base_dir, "Resources", "docroot")
+if os.path.exists(static_dir):
+    app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 
 class CastHub:
@@ -436,22 +443,23 @@ async def post_status():
     return Response(content=status_msg, media_type="text/plain")
 
 
-@app.get("/api/hub")
-async def get_hub_status():
+@app.get("/api/hub/admin")
+@app.get("/api/hub/admin/")
+async def get_hub_status(request: Request):
     """Get hub status page showing all users and endpoints"""
-    # Always serve the HTML page
-    import os
-    html_path = os.path.join(os.path.dirname(__file__), "hub_status.html")
+    # Use the same path resolution as the static mount
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    html_path = os.path.join(base_dir, "Resources", "docroot", "hub-status.html")
+    
     if os.path.exists(html_path):
+        # Read and return the file content directly
         with open(html_path, 'r', encoding='utf-8') as f:
             html_content = f.read()
         return Response(content=html_content, media_type="text/html")
-    else:
-        # Fallback if file not found
-        return Response(
-            content="<html><body><h1>Hub Status</h1><p>Status page not found. Check /debug/websockets for JSON data.</p></body></html>",
-            media_type="text/html"
-        )
+    
+    # If file not found, try redirecting to static mount
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url="/static/hub-status.html", status_code=302)
 
 
 @app.get("/api/hub/status")
@@ -917,7 +925,7 @@ def main():
     print("")
     print("Test endpoints:")
     print(f"  GET    http://{args.host}:{args.port}/")
-    print(f"  GET    http://{args.host}:{args.port}/api/hub (status page)")
+    print(f"  GET    http://{args.host}:{args.port}/api/hub/admin (status page)")
     print(f"  GET    http://{args.host}:{args.port}/api/hub/{{topic}}")
     print(f"  POST   http://{args.host}:{args.port}/api/hub/")
     print(f"  POST   http://{args.host}:{args.port}/api/hub/{{topic}}")
