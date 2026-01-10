@@ -449,7 +449,7 @@ async def get_hub_status(request: Request):
     """Get hub status page showing all users and endpoints"""
     # Use the same path resolution as the static mount
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    html_path = os.path.join(base_dir, "Resources", "docroot", "hub-status.html")
+    html_path = os.path.join(base_dir, "Resources", "docroot", "admin.html")
     
     if os.path.exists(html_path):
         # Read and return the file content directly
@@ -459,7 +459,7 @@ async def get_hub_status(request: Request):
     
     # If file not found, try redirecting to static mount
     from fastapi.responses import RedirectResponse
-    return RedirectResponse(url="/static/hub-status.html", status_code=302)
+    return RedirectResponse(url="/static/admin.html", status_code=302)
 
 
 @app.get("/api/hub/status")
