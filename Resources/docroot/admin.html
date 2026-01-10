@@ -10,18 +10,19 @@
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
             margin: 0;
             padding: 20px;
-            background-color: #f5f5f5;
+            background-color: #2b2b2b;
+            color: #e0e0e0;
         }
         .container {
             max-width: 1400px;
             margin: 0 auto;
-            background: white;
+            background: #3d3d3d;
             padding: 30px;
             border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.5);
         }
-        h1 {
-            color: #333;
+        h1, h2 {
+            color: #e0e0e0;
             margin-top: 0;
             display: flex;
             align-items: center;
@@ -37,21 +38,22 @@
             margin: 20px 0;
         }
         .stat-card {
-            background: #f8f9fa;
+            background: #4a4a4a;
             padding: 20px;
             border-radius: 6px;
-            border-left: 4px solid #007bff;
+            border-left: 4px solid #90A4AE;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.3);
         }
         .stat-card h3 {
             margin: 0 0 10px 0;
-            color: #666;
+            color: #b0b0b0;
             font-size: 14px;
             font-weight: normal;
         }
         .stat-card .value {
             font-size: 32px;
             font-weight: bold;
-            color: #333;
+            color: #e0e0e0;
         }
         table {
             width: 100%;
@@ -61,19 +63,20 @@
         th, td {
             padding: 12px;
             text-align: left;
-            border-bottom: 1px solid #ddd;
+            border-bottom: 1px solid #555;
+            color: #e0e0e0;
         }
         .audit-log table th,
         .audit-log table td {
             padding: 6px 12px;
         }
         th {
-            background-color: #f8f9fa;
+            background-color: #4a4a4a;
             font-weight: 600;
-            color: #333;
+            color: #e0e0e0;
         }
         tr:hover {
-            background-color: #f8f9fa;
+            background-color: #4a4a4a;
         }
         .channel {
             display: inline-block;
@@ -83,22 +86,22 @@
             font-weight: 600;
         }
         .channel-websocket {
-            background-color: #d4edda;
-            color: #155724;
+            background-color: #1e3a5f;
+            color: #90caf9;
         }
         .channel-websub {
-            background-color: #cce5ff;
-            color: #004085;
+            background-color: #5d4037;
+            color: #ffb74d;
         }
         .endpoint {
             font-family: monospace;
             font-size: 12px;
-            color: #666;
+            color: #66b3ff;
             word-break: break-all;
         }
         .topic {
             font-weight: 500;
-            color: #007bff;
+            color: #66b3ff;
         }
         .no-subscriptions {
             text-align: center;
@@ -114,98 +117,104 @@
         }
         button {
             padding: 8px 16px;
-            border: none;
+            border: 1px solid #666;
             border-radius: 4px;
-            background-color: #007bff;
-            color: white;
+            background-color: #4a4a4a;
+            color: #e0e0e0;
             cursor: pointer;
             font-size: 14px;
+            transition: background-color 0.2s;
         }
-        button:hover {
-            background-color: #0056b3;
+        button:hover:not(:disabled) {
+            background-color: #5a5a5a;
+            border-color: #777;
         }
         button:disabled {
-            background-color: #ccc;
+            background-color: #3a3a3a;
+            color: #777;
             cursor: not-allowed;
+            border-color: #555;
         }
         .last-updated {
-            color: #666;
+            color: #b0b0b0;
             font-size: 14px;
         }
         .error {
-            background-color: #f8d7da;
-            color: #721c24;
+            background-color: #5d4037;
+            color: #ffb74d;
             padding: 12px;
             border-radius: 4px;
             margin: 10px 0;
+            border-left: 3px solid #ff9800;
         }
         .audit-log {
             margin-top: 30px;
             padding-top: 30px;
-            border-top: 2px solid #e0e0e0;
+            border-top: 2px solid #555;
         }
         .filters {
             margin: 15px 0;
             padding: 15px;
-            background-color: #f8f9fa;
+            background-color: #4a4a4a;
             border-radius: 6px;
             display: flex;
             gap: 10px;
             align-items: center;
             flex-wrap: wrap;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.3);
         }
         .filters select {
             padding: 8px 12px;
-            border: 1px solid #ddd;
+            border: 1px solid #666;
             border-radius: 4px;
             font-size: 14px;
             min-width: 150px;
-            background-color: white;
+            background-color: #3d3d3d;
+            color: #e0e0e0;
+        }
+        .filters select:focus {
+            outline: none;
+            border-color: #90A4AE;
         }
         .filters button {
             padding: 8px 16px;
-            background-color: #28a745;
+            background-color: #90A4AE;
             color: white;
-            border: none;
+            border: 1px solid #78909C;
             border-radius: 4px;
             cursor: pointer;
             font-size: 14px;
         }
         .filters button:hover {
-            background-color: #218838;
-        }
-        .filters button.danger {
-            background-color: #dc3545;
-        }
-        .filters button.danger:hover {
-            background-color: #c82333;
+            background-color: #78909C;
+            border-color: #90A4AE;
         }
         .event-name {
-            color: #007bff;
+            color: #66b3ff;
             cursor: pointer;
             text-decoration: underline;
         }
         .event-name:hover {
-            color: #0056b3;
+            color: #90caf9;
         }
         .event-details {
             display: none;
             margin-top: 10px;
             padding: 15px;
-            background-color: #f8f9fa;
-            border-left: 3px solid #007bff;
+            background-color: #2b2b2b;
+            border-left: 3px solid #90A4AE;
             border-radius: 4px;
             font-family: monospace;
             font-size: 12px;
             white-space: pre-wrap;
             word-wrap: break-word;
-            color: #333;
+            color: #e0e0e0;
         }
         .event-details.show {
             display: block;
         }
         .timestamp {
-            color: #666;
+            color: #b0b0b0;
             font-size: 12px;
         }
         .direction {
@@ -216,12 +225,12 @@
             text-transform: uppercase;
         }
         .direction-received {
-            background-color: #d4edda;
-            color: #155724;
+            background-color: #2e7d32;
+            color: #a5d6a7;
         }
         .direction-sent {
-            background-color: #cce5ff;
-            color: #004085;
+            background-color: #1565c0;
+            color: #90caf9;
         }
     </style>
 </head>
