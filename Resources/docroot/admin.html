@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>3D Slicer Hub Status</title>
+    <title>3D Slicer Cast Hub Status</title>
     <link rel="icon" type="image/x-icon" href="/favicon.ico">
     <style>
         body {
@@ -27,6 +27,15 @@
             display: flex;
             align-items: center;
             gap: 10px;
+        }
+        h2 button {
+            background-color: #90A4AE;
+            color: white;
+            border: 1px solid #78909C;
+        }
+        h2 button:hover {
+            background-color: #78909C;
+            border-color: #90A4AE;
         }
         h1 img {
             height: 40px;
@@ -238,7 +247,7 @@
     <div class="container">
         <h1>
             <img src="/images/3DSlicer-DesktopIcon.png" alt="3D Slicer" onerror="this.style.display='none'">
-            3D Slicer Hub Status
+            3D Slicer Cast Hub Status
         </h1>
         
         <div class="controls">
@@ -256,10 +265,6 @@
             <div class="stat-card">
                 <h3>Active WebSockets</h3>
                 <div class="value" id="totalWebsockets">-</div>
-            </div>
-            <div class="stat-card">
-                <h3>Active Topics</h3>
-                <div class="value" id="totalTopics">-</div>
             </div>
             <div class="stat-card">
                 <h3>Active Conferences</h3>
@@ -280,7 +285,6 @@
         <div class="audit-log">
             <h2>
                 Audit Log
-                <button onclick="loadAuditLog()" style="margin-left: 10px; font-size: 0.8em; padding: 5px 10px;">Refresh</button>
             </h2>
             <div class="filters">
                 <select id="userFilter">
@@ -290,7 +294,6 @@
                     <option value="">All Topics</option>
                 </select>
                 <button onclick="loadAuditLog()">Filter</button>
-                <button class="danger" onclick="clearAuditLog()">Clear Audit Log</button>
             </div>
             <div id="auditLogTable">
                 <p>Loading audit log...</p>
@@ -312,7 +315,6 @@
                 
                 document.getElementById('totalSubscriptions').textContent = data.total_subscriptions || 0;
                 document.getElementById('totalWebsockets').textContent = data.total_websockets || 0;
-                document.getElementById('totalTopics').textContent = data.total_topics || 0;
                 document.getElementById('totalMessages').textContent = data.total_messages || 0;
                 
                 const tableDiv = document.getElementById('subscriptionsTable');
