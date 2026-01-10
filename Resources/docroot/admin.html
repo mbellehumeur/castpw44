@@ -242,7 +242,7 @@
         </h1>
         
         <div class="controls">
-            <button onclick="refreshAll()">Refresh Now</button>
+            <span class="last-updated" id="connectionStatus">Connecting...</span>
             <span class="last-updated" id="lastUpdated"></span>
         </div>
 
@@ -504,8 +504,106 @@
             loadAuditLog();
         }
         
-        loadStatus();
-        loadAuditLog();
+        // Admin WebSocket connection
+        let adminWebSocket = null;
+        let reconnectAttempts = 0;
+        const maxReconnectAttempts = 5;
+
+        function connectAdminWebSocket() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}/ws/admin`;
+            
+            try {
+                adminWebSocket = new WebSocket(wsUrl);
+                
+                adminWebSocket.onopen = function(event) {
+                    console.log('Admin WebSocket connected');
+                    reconnectAttempts = 0;
+                    const statusEl = document.getElementById('connectionStatus');
+                    if (statusEl) {
+                        statusEl.textContent = 'Connected';
+                        statusEl.style.color = '#90A4AE';
+                    }
+                };
+                
+                adminWebSocket.onmessage = function(event) {
+                    try {
+                        const message = JSON.parse(event.data);
+                        console.log('Received admin message:', message);
+                        
+                        if (message.type === 'refresh') {
+                            console.log('Refresh command received from server');
+                            refreshAll();
+                        } else if (message.type === 'connection.established') {
+                            console.log('Admin connection established');
+                            const statusEl = document.getElementById('connectionStatus');
+                            if (statusEl) {
+                                statusEl.textContent = 'Connected';
+                                statusEl.style.color = '#90A4AE';
+                            }
+                        } else if (message.type === 'ping') {
+                            // Respond to ping with pong
+                            adminWebSocket.send(JSON.stringify({ type: 'pong' }));
+                        }
+                    } catch (e) {
+                        console.error('Error parsing admin message:', e);
+                    }
+                };
+                
+                adminWebSocket.onerror = function(error) {
+                    console.error('Admin WebSocket error:', error);
+                    const statusEl = document.getElementById('connectionStatus');
+                    if (statusEl) {
+                        statusEl.textContent = 'Connection error';
+                        statusEl.style.color = '#d32f2f';
+                    }
+                };
+                
+                adminWebSocket.onclose = function(event) {
+                    console.log('Admin WebSocket closed');
+                    const statusEl = document.getElementById('connectionStatus');
+                    if (statusEl) {
+                        statusEl.textContent = 'Disconnected';
+                        statusEl.style.color = '#999';
+                    }
+                    
+                    // Attempt to reconnect
+                    if (reconnectAttempts < maxReconnectAttempts) {
+                        reconnectAttempts++;
+                        console.log(`Attempting to reconnect (${reconnectAttempts}/${maxReconnectAttempts})...`);
+                        setTimeout(connectAdminWebSocket, 2000 * reconnectAttempts);
+                    } else {
+                        console.error('Max reconnection attempts reached');
+                        const statusEl = document.getElementById('connectionStatus');
+                        if (statusEl) {
+                            statusEl.textContent = 'Connection failed';
+                            statusEl.style.color = '#d32f2f';
+                        }
+                    }
+                };
+            } catch (e) {
+                console.error('Error creating admin WebSocket:', e);
+                const statusEl = document.getElementById('connectionStatus');
+                if (statusEl) {
+                    statusEl.textContent = 'Connection failed';
+                    statusEl.style.color = '#d32f2f';
+                }
+            }
+        }
+
+        // Connect on page load
+        window.addEventListener('load', function() {
+            connectAdminWebSocket();
+            loadStatus();
+            loadAuditLog();
+        });
+
+        // Clean up on page unload
+        window.addEventListener('beforeunload', function() {
+            if (adminWebSocket) {
+                adminWebSocket.close();
+            }
+        });
     </script>
 </body>
 </html>

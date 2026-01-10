@@ -65,6 +65,7 @@ class CastHub:
     def __init__(self):
         self.subscriptions: List[Dict] = []
         self.websocket_connections: Dict[str, WebSocket] = {}  # endpoint -> WebSocket
+        self.admin_websockets: List[WebSocket] = []  # Track admin connections
         self.conferences: List[Dict] = []
         self.last_context: Dict[str, Dict] = {}  # topic -> context
         self.audit_log: List[Dict] = []  # List of logged events
@@ -120,7 +121,7 @@ class CastHub:
     
     def add_subscription(self, subscription_data: Dict) -> Dict:
         """Handle subscription/unsubscription requests - matches CastHubRequestHandler.handleHubSubscription"""
-        hub_mode = subscription_data.get("hub.mode", subscription_data.get("hub_mode", ""))
+        hub_mode = subscription_data.get("hub.mode", subscription_data.get("hub_mode", "subscribe"))
         hub_topic = subscription_data.get("hub.topic", subscription_data.get("hub_topic", ""))
         hub_events = subscription_data.get("hub.events", subscription_data.get("hub_events", ""))
         hub_callback = subscription_data.get("hub.callback", subscription_data.get("hub_callback", ""))
@@ -247,6 +248,41 @@ class CastHub:
             del self.websocket_connections[endpoint]
             self.remove_subscription(endpoint=endpoint)
             print(f"[LOG] WebSocket unregistered for endpoint: {endpoint} (remaining: {len(self.websocket_connections)})")
+    
+    def register_admin_websocket(self, websocket: WebSocket):
+        """Register an admin WebSocket connection"""
+        if websocket not in self.admin_websockets:
+            self.admin_websockets.append(websocket)
+            self.log(f"Admin WebSocket registered (total: {len(self.admin_websockets)})")
+    
+    def unregister_admin_websocket(self, websocket: WebSocket):
+        """Unregister an admin WebSocket connection"""
+        if websocket in self.admin_websockets:
+            self.admin_websockets.remove(websocket)
+            self.log(f"Admin WebSocket unregistered (remaining: {len(self.admin_websockets)})")
+    
+    async def send_admin_refresh_command(self):
+        """Send refresh command to all connected admin clients"""
+        if not self.admin_websockets:
+            return
+        
+        message = {
+            "type": "refresh",
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        disconnected = []
+        for ws in self.admin_websockets:
+            try:
+                await ws.send_json(message)
+                self.log("Sent refresh command to admin client")
+            except Exception as e:
+                self.log(f"Error sending refresh to admin: {e}")
+                disconnected.append(ws)
+        
+        # Clean up disconnected websockets
+        for ws in disconnected:
+            self.unregister_admin_websocket(ws)
     
     def add_audit_log(self, user: str, topic: str, event_name: str, event_data: Dict, direction: str = "received"):
         """Add an entry to the audit log
@@ -441,6 +477,15 @@ async def post_status():
     
     print(status_msg)
     return Response(content=status_msg, media_type="text/plain")
+
+
+@app.get("/test-client")
+@app.get("/test-client/")
+async def get_test_client(request: Request):
+    """Get test client page for subscribing and publishing"""
+    # Redirect to static mount - simpler and more reliable
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url="/static/test-client.html", status_code=301)
 
 
 @app.get("/api/hub/admin")
@@ -871,6 +916,57 @@ async def websocket_endpoint(websocket: WebSocket, endpoint: str):
         cast_hub.log(f"WebSocket cleanup completed for endpoint: {endpoint}")
 
 
+@app.websocket("/ws/admin")
+async def admin_websocket_endpoint(websocket: WebSocket):
+    """WebSocket endpoint for admin page - receives refresh commands"""
+    import asyncio
+    
+    await websocket.accept()
+    cast_hub.log("Admin WebSocket connection accepted")
+    
+    # Register admin WebSocket
+    cast_hub.register_admin_websocket(websocket)
+    
+    # Send initial connection confirmation
+    try:
+        await websocket.send_json({
+            "type": "connection.established",
+            "role": "admin",
+            "timestamp": datetime.now().isoformat()
+        })
+    except Exception as e:
+        cast_hub.log(f"Error sending admin connection confirmation: {e}")
+    
+    try:
+        while True:
+            # Receive messages from admin client (pong, etc.)
+            data = await websocket.receive_text()
+            try:
+                message = json.loads(data)
+                cast_hub.log(f"Received admin WebSocket message: {message}")
+                
+                # Respond to pong messages
+                if message.get("type") == "pong":
+                    cast_hub.log("Received pong from admin client")
+            except json.JSONDecodeError:
+                cast_hub.log(f"Received non-JSON admin message: {data}")
+    except WebSocketDisconnect:
+        cast_hub.log("Admin WebSocket disconnected")
+    except Exception as e:
+        cast_hub.log(f"Admin WebSocket error: {type(e).__name__}: {e}")
+    finally:
+        # Unregister admin WebSocket
+        cast_hub.unregister_admin_websocket(websocket)
+        cast_hub.log("Admin WebSocket cleanup completed")
+
+
+@app.post("/api/admin/refresh")
+async def trigger_admin_refresh():
+    """Trigger refresh command to all connected admin clients"""
+    await cast_hub.send_admin_refresh_command()
+    return {"status": "sent", "clients": len(cast_hub.admin_websockets)}
+
+
 @app.post("/oauth/token")
 async def post_oauth_token():
     """Handle POST /oauth/token - OAuth token endpoint"""
@@ -925,7 +1021,8 @@ def main():
     print("")
     print("Test endpoints:")
     print(f"  GET    http://{args.host}:{args.port}/")
-    print(f"  GET    http://{args.host}:{args.port}/api/hub/admin (status page)")
+    print(f"  GET    http://{args.host}:{args.port}/api/hub/admin (admin status page)")
+    print(f"  GET    http://{args.host}:{args.port}/test-client (test client page)")
     print(f"  GET    http://{args.host}:{args.port}/api/hub/{{topic}}")
     print(f"  POST   http://{args.host}:{args.port}/api/hub/")
     print(f"  POST   http://{args.host}:{args.port}/api/hub/{{topic}}")

@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cast Hub Test Client</title>
+    <link rel="icon" type="image/x-icon" href="/favicon.ico">
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #2b2b2b;
+            color: #e0e0e0;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: #3d3d3d;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+        }
+        h1, h2 {
+            color: #e0e0e0;
+            margin-top: 0;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #b0b0b0;
+            font-size: 14px;
+        }
+        input, textarea, select {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #666;
+            border-radius: 4px;
+            background-color: #4a4a4a;
+            color: #e0e0e0;
+            font-size: 14px;
+            box-sizing: border-box;
+        }
+        input:focus, textarea:focus, select:focus {
+            outline: none;
+            border-color: #90A4AE;
+        }
+        textarea {
+            min-height: 100px;
+            font-family: monospace;
+            resize: vertical;
+        }
+        button {
+            padding: 10px 20px;
+            border: 1px solid #666;
+            border-radius: 4px;
+            background-color: #90A4AE;
+            color: white;
+            cursor: pointer;
+            font-size: 14px;
+            margin-right: 10px;
+            margin-bottom: 10px;
+            transition: background-color 0.2s;
+        }
+        button:hover:not(:disabled) {
+            background-color: #78909C;
+            border-color: #90A4AE;
+        }
+        button:disabled {
+            background-color: #3a3a3a;
+            color: #777;
+            cursor: not-allowed;
+            border-color: #555;
+        }
+        .status {
+            padding: 15px;
+            border-radius: 4px;
+            margin: 20px 0;
+            background-color: #4a4a4a;
+        }
+        .status.connected {
+            border-left: 4px solid #90A4AE;
+        }
+        .status.disconnected {
+            border-left: 4px solid #d32f2f;
+        }
+        .status.connecting {
+            border-left: 4px solid #ff9800;
+        }
+        .messages {
+            max-height: 400px;
+            overflow-y: auto;
+            background-color: #2b2b2b;
+            padding: 15px;
+            border-radius: 4px;
+            margin-top: 20px;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        .message {
+            padding: 8px;
+            margin-bottom: 8px;
+            border-radius: 4px;
+            background-color: #3d3d3d;
+            border-left: 3px solid #90A4AE;
+            word-wrap: break-word;
+        }
+        .message.received {
+            border-left-color: #4CAF50;
+        }
+        .message.sent {
+            border-left-color: #2196F3;
+        }
+        .message.error {
+            border-left-color: #d32f2f;
+            background-color: #5d4037;
+        }
+        .message-header {
+            color: #b0b0b0;
+            font-size: 11px;
+            margin-bottom: 4px;
+        }
+        .message-content {
+            color: #e0e0e0;
+            white-space: pre-wrap;
+        }
+        .section {
+            margin-bottom: 30px;
+            padding-bottom: 20px;
+            border-bottom: 1px solid #555;
+        }
+        .section:last-child {
+            border-bottom: none;
+        }
+        .error {
+            background-color: #5d4037;
+            color: #ffb74d;
+            padding: 12px;
+            border-radius: 4px;
+            margin: 10px 0;
+            border-left: 3px solid #ff9800;
+        }
+        .success {
+            background-color: #2e7d32;
+            color: #a5d6a7;
+            padding: 12px;
+            border-radius: 4px;
+            margin: 10px 0;
+            border-left: 3px solid #4CAF50;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Cast Hub Test Client</h1>
+        
+        <div class="section">
+            <h2>Subscribe</h2>
+            <div class="form-group">
+                <label for="topic">Topic:</label>
+                <input type="text" id="topic" value="test-topic" placeholder="Enter topic name">
+            </div>
+            <div class="form-group">
+                <label for="subscriberName">Subscriber Name:</label>
+                <input type="text" id="subscriberName" value="test-client" placeholder="Enter subscriber name">
+            </div>
+            <div class="form-group">
+                <label for="events">Events (comma-separated, or * for all):</label>
+                <input type="text" id="events" value="*" placeholder="e.g., *, or update,close">
+            </div>
+            <button id="subscribeBtn" onclick="subscribe()">Subscribe</button>
+            <button id="unsubscribeBtn" onclick="unsubscribe()" disabled>Unsubscribe</button>
+            
+            <div id="subscribeStatus"></div>
+            <div id="connectionStatus" class="status disconnected">
+                <strong>Status:</strong> <span id="statusText">Not connected</span>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>Publish</h2>
+            <div class="form-group">
+                <label for="publishTopic">Topic:</label>
+                <input type="text" id="publishTopic" value="test-topic" placeholder="Enter topic name">
+            </div>
+            <div class="form-group">
+                <label for="eventType">Event Type:</label>
+                <input type="text" id="eventType" value="update" placeholder="e.g., update, close, open">
+            </div>
+            <div class="form-group">
+                <label for="eventData">Event Data (JSON):</label>
+                <textarea id="eventData" placeholder='{"key": "value"}'>{
+  "message": "Hello from test client",
+  "timestamp": "2024-01-01T00:00:00Z"
+}</textarea>
+            </div>
+            <button id="publishBtn" onclick="publish()">Publish</button>
+            
+            <div id="publishStatus"></div>
+        </div>
+
+        <div class="section">
+            <h2>Received Messages</h2>
+            <button onclick="clearMessages()">Clear Messages</button>
+            <div id="messages" class="messages"></div>
+        </div>
+    </div>
+
+    <script>
+        let websocket = null;
+        let websocketUrl = null;
+        let subscribed = false;
+
+        function addMessage(type, content, label = '') {
+            const messagesDiv = document.getElementById('messages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${type}`;
+            
+            const timestamp = new Date().toLocaleTimeString();
+            const header = label ? `${label} - ${timestamp}` : timestamp;
+            
+            messageDiv.innerHTML = `
+                <div class="message-header">${header}</div>
+                <div class="message-content">${typeof content === 'string' ? content : JSON.stringify(content, null, 2)}</div>
+            `;
+            
+            messagesDiv.insertBefore(messageDiv, messagesDiv.firstChild);
+            
+            // Keep only last 50 messages
+            while (messagesDiv.children.length > 50) {
+                messagesDiv.removeChild(messagesDiv.lastChild);
+            }
+        }
+
+        function showStatus(elementId, message, isError = false) {
+            const statusDiv = document.getElementById(elementId);
+            statusDiv.innerHTML = `<div class="${isError ? 'error' : 'success'}">${message}</div>`;
+            setTimeout(() => {
+                statusDiv.innerHTML = '';
+            }, 5000);
+        }
+
+        function updateConnectionStatus(status, text) {
+            const statusDiv = document.getElementById('connectionStatus');
+            const statusText = document.getElementById('statusText');
+            statusDiv.className = `status ${status}`;
+            statusText.textContent = text;
+        }
+
+        async function subscribe() {
+            const topic = document.getElementById('topic').value.trim();
+            const subscriberName = document.getElementById('subscriberName').value.trim();
+            const events = document.getElementById('events').value.trim();
+
+            if (!topic || !subscriberName) {
+                showStatus('subscribeStatus', 'Topic and Subscriber Name are required', true);
+                return;
+            }
+
+            try {
+                // Use URLSearchParams instead of FormData to match reference implementation
+                const subscribeFormData = new URLSearchParams();
+                subscribeFormData.append('hub.mode', 'subscribe');
+                subscribeFormData.append('hub.channel.type', 'websocket');
+                subscribeFormData.append('hub.callback', window.location.origin + '/castCallback');
+                subscribeFormData.append('hub.events', events || '*');
+                subscribeFormData.append('hub.topic', topic);
+                subscribeFormData.append('hub.lease', '7200');
+                subscribeFormData.append('subscriber.name', subscriberName);
+
+                const response = await fetch('/api/hub/', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded'
+                    },
+                    body: subscribeFormData
+                });
+
+                // Check specifically for 202 status like reference code
+                if (response.status == 202) {
+                    const subscriptionResponse = await response.json();
+                    websocketUrl = subscriptionResponse['hub.channel.endpoint'];
+
+                    if (!websocketUrl) {
+                        console.error('Response data:', subscriptionResponse);
+                        throw new Error('No WebSocket URL returned from subscription. Response: ' + JSON.stringify(subscriptionResponse));
+                    }
+
+                    // Normalize WebSocket URL to use correct domain (like reference code)
+                    let normalizedWebsocketUrl = websocketUrl;
+                    try {
+                        const hubEndpointUrl = new URL(window.location.origin);
+                        const websocketUrlObj = new URL(websocketUrl);
+                        
+                        // Replace the domain/host with the one from current origin
+                        // Convert http/https to ws/wss
+                        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                        normalizedWebsocketUrl = websocketUrl.replace(
+                            websocketUrlObj.origin,
+                            `${wsProtocol}//${hubEndpointUrl.host}`
+                        );
+                    } catch (err) {
+                        console.warn('Could not normalize WebSocket URL, using original:', err);
+                    }
+
+                    addMessage('sent', `Subscribed to topic: ${topic}`, 'Subscribe');
+                    showStatus('subscribeStatus', `Subscribed successfully! WebSocket: ${normalizedWebsocketUrl}`);
+                    
+                    subscribed = true;
+                    document.getElementById('subscribeBtn').disabled = true;
+                    document.getElementById('unsubscribeBtn').disabled = false;
+
+                    // Connect to WebSocket with normalized URL
+                    connectWebSocket(normalizedWebsocketUrl);
+
+                } else if (response.status == 401) {
+                    showStatus('subscribeStatus', 'Subscription response 401 - Token refresh needed', true);
+                } else {
+                    const errorText = await response.text();
+                    throw new Error(`Subscription rejected by hub: ${response.status}, message: ${errorText}`);
+                }
+            } catch (error) {
+                console.error('Subscribe error:', error);
+                addMessage('error', `Subscribe error: ${error.message}`, 'Error');
+                showStatus('subscribeStatus', `Error: ${error.message}`, true);
+            }
+        }
+
+        function connectWebSocket(url) {
+            if (websocket) {
+                websocket.close();
+            }
+
+            // Store the original websocketUrl for confirmation message (before normalization)
+            const originalWebsocketUrl = websocketUrl;
+
+            updateConnectionStatus('connecting', 'Connecting...');
+            addMessage('sent', `Connecting to: ${url}`, 'WebSocket');
+
+            try {
+                websocket = new WebSocket(url);
+
+                websocket.onopen = function(event) {
+                    console.log('WebSocket connected');
+                    updateConnectionStatus('connected', 'Connected');
+                    addMessage('received', 'WebSocket connection established', 'Connection');
+                    
+                    // Send confirmation message like reference code
+                    if (originalWebsocketUrl) {
+                        websocket.send(JSON.stringify({"hub.channel.endpoint": originalWebsocketUrl}));
+                        addMessage('sent', {"hub.channel.endpoint": originalWebsocketUrl}, 'WebSocket Confirmation');
+                    }
+                };
+
+                websocket.onmessage = function(event) {
+                    try {
+                        const message = JSON.parse(event.data);
+                        console.log('Received message:', message);
+                        addMessage('received', message, 'Received');
+                    } catch (e) {
+                        addMessage('received', event.data, 'Received (raw)');
+                    }
+                };
+
+                websocket.onerror = function(error) {
+                    console.error('WebSocket error:', error);
+                    addMessage('error', 'WebSocket error occurred', 'Error');
+                    updateConnectionStatus('disconnected', 'Connection error');
+                };
+
+                websocket.onclose = function(event) {
+                    console.log('WebSocket closed');
+                    updateConnectionStatus('disconnected', 'Disconnected');
+                    addMessage('received', 'WebSocket connection closed', 'Connection');
+                    websocket = null;
+                };
+
+            } catch (e) {
+                console.error('Error creating WebSocket:', e);
+                addMessage('error', `WebSocket error: ${e.message}`, 'Error');
+                updateConnectionStatus('disconnected', 'Connection failed');
+            }
+        }
+
+        async function unsubscribe() {
+            if (!websocketUrl) {
+                showStatus('subscribeStatus', 'Not subscribed', true);
+                return;
+            }
+
+            try {
+                const topic = document.getElementById('topic').value.trim();
+                const subscriberName = document.getElementById('subscriberName').value.trim();
+                const events = document.getElementById('events').value.trim();
+
+                // Use URLSearchParams to match reference implementation
+                const subscribeFormData = new URLSearchParams();
+                subscribeFormData.append('hub.mode', 'unsubscribe');
+                subscribeFormData.append('hub.channel.type', 'websocket');
+                subscribeFormData.append('hub.callback', window.location.origin + '/castCallback');
+                subscribeFormData.append('hub.events', events || '*');
+                subscribeFormData.append('hub.topic', topic);
+                subscribeFormData.append('hub.lease', '7200');
+                subscribeFormData.append('subscriber.name', subscriberName);
+
+                const response = await fetch('/api/hub/', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded'
+                    },
+                    body: subscribeFormData
+                });
+
+                // Check specifically for 202 status like reference code
+                if (response.status == 202) {
+                    const subscriptionResponse = await response.json();
+                    console.log('Unsubscribe successfully from hub');
+                    addMessage('sent', `Unsubscribed from topic: ${topic}`, 'Unsubscribe');
+                    showStatus('subscribeStatus', 'Unsubscribed successfully');
+                } else {
+                    console.log('Unsubscribe refused by the hub');
+                    const errorText = await response.text();
+                    throw new Error(`Unsubscribe refused by hub: ${response.status}, message: ${errorText}`);
+                }
+
+                // Close WebSocket after unsubscribing (like reference code)
+                if (websocket) {
+                    websocket.close();
+                    websocket = null;
+                }
+
+                subscribed = false;
+                websocketUrl = null;
+                document.getElementById('subscribeBtn').disabled = false;
+                document.getElementById('unsubscribeBtn').disabled = true;
+                updateConnectionStatus('disconnected', 'Not connected');
+
+            } catch (error) {
+                console.error('Unsubscribe error:', error);
+                addMessage('error', `Unsubscribe error: ${error.message}`, 'Error');
+                showStatus('subscribeStatus', `Error: ${error.message}`, true);
+            }
+        }
+
+        async function publish() {
+            const topic = document.getElementById('publishTopic').value.trim();
+            const eventType = document.getElementById('eventType').value.trim();
+            const eventDataText = document.getElementById('eventData').value.trim();
+
+            if (!topic || !eventType) {
+                showStatus('publishStatus', 'Topic and Event Type are required', true);
+                return;
+            }
+
+            let eventData;
+            try {
+                eventData = eventDataText ? JSON.parse(eventDataText) : {};
+            } catch (e) {
+                showStatus('publishStatus', 'Invalid JSON in Event Data', true);
+                return;
+            }
+
+            try {
+                const payload = {
+                    event: {
+                        "hub.topic": topic,
+                        "hub.event": eventType,
+                        "context": eventData
+                    }
+                };
+
+                const response = await fetch(`/api/hub/${encodeURIComponent(topic)}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const data = await response.json();
+                addMessage('sent', payload, 'Published');
+                showStatus('publishStatus', 'Event published successfully');
+
+            } catch (error) {
+                console.error('Publish error:', error);
+                addMessage('error', `Publish error: ${error.message}`, 'Error');
+                showStatus('publishStatus', `Error: ${error.message}`, true);
+            }
+        }
+
+        function clearMessages() {
+            document.getElementById('messages').innerHTML = '';
+        }
+
+        // Clean up on page unload
+        window.addEventListener('beforeunload', function() {
+            if (websocket) {
+                websocket.close();
+            }
+        });
+    </script>
+</body>
+</html>
+
