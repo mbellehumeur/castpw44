@@ -25,6 +25,11 @@
             color: #e0e0e0;
             margin-top: 0;
         }
+        h1 {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-end;
+        }
         .form-group {
             margin-bottom: 20px;
         }
@@ -156,8 +161,13 @@
 <body>
     <div class="container">
         <h1>
-            <img src="/images/3DSlicer-DesktopIcon.png" alt="3D Slicer" onerror="this.style.display='none'" style="height: 40px; vertical-align: middle; margin-right: 10px;">
-            3D Slicer Cast Test Client
+            <span style="display: flex; align-items: center;">
+                <img src="/images/3DSlicer-DesktopIcon.png" alt="3D Slicer" onerror="this.style.display='none'" style="height: 40px; vertical-align: middle; margin-right: 10px;">
+                3D Slicer Cast Test Client
+            </span>
+            <span style="font-weight: normal; color: #90A4AE; font-size: 24px;">
+                User: <span id="subscriberNameDisplay"></span>
+            </span>
         </h1>
         
         <div class="section">
@@ -176,10 +186,6 @@
                     <input type="text" id="topic" value="test-topic" placeholder="Enter topic name">
                 </div>
                 <div class="form-group" style="flex: 1; min-width: 150px; margin-bottom: 0;">
-                    <label for="subscriberName">Subscriber Name:</label>
-                    <input type="text" id="subscriberName" value="test-client" placeholder="Enter subscriber name">
-                </div>
-                <div class="form-group" style="flex: 1; min-width: 150px; margin-bottom: 0;">
                     <label for="events">Events:</label>
                     <input type="text" id="events" value="*" placeholder="* or update,close">
                 </div>
@@ -196,10 +202,6 @@
 
         <div class="section">
             <h2>Publish</h2>
-            <div class="form-group">
-                <label for="publishTopic">Topic:</label>
-                <input type="text" id="publishTopic" value="test-topic" placeholder="Enter topic name">
-            </div>
             <div class="form-group">
                 <label for="eventType">Event Type:</label>
                 <input type="text" id="eventType" list="eventTypeOptions" value="imagingstudy-open" placeholder="e.g., imagingstudy-open, imagingstudy-close">
@@ -248,7 +250,13 @@
   }
 ]</textarea>
             </div>
-            <button id="publishBtn" onclick="publish()">Publish</button>
+            <div style="display: flex; gap: 15px; align-items: flex-end; margin-top: 15px;">
+                <button id="publishBtn" onclick="publish()">Publish</button>
+                <div style="flex: 1; display: flex; align-items: center; gap: 10px; margin-bottom: 0;">
+                    <label for="publishTopic" style="display: inline-block; margin-bottom: 0; white-space: nowrap;">Topic:</label>
+                    <input type="text" id="publishTopic" value="test-topic" placeholder="Enter topic name" style="flex: 1;">
+                </div>
+            </div>
             
             <div id="publishStatus"></div>
         </div>
@@ -264,6 +272,9 @@
         let websocket = null;
         let websocketUrl = null;
         let subscribed = false;
+        let accessToken = null;
+        let subscriberName = null;
+        let topicFromToken = null;
 
         // Hub configuration
         const hubConfigs = {
@@ -277,6 +288,44 @@
             const selectedHub = hubSelect.value;
             return hubConfigs[selectedHub] || hubConfigs['local'];
         }
+
+        // Query token endpoint on startup
+        async function initializeToken() {
+            try {
+                const response = await fetch('/oauth/token', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded'
+                    },
+                    body: new URLSearchParams({
+                        'client_product_Name': 'TEST-CLIENT'
+                    })
+                });
+
+                if (response.ok) {
+                    const tokenData = await response.json();
+                    accessToken = tokenData.access_token;
+                    subscriberName = tokenData.user_name;
+                    topicFromToken = tokenData.topic;
+
+                    // Update UI
+                    document.getElementById('subscriberNameDisplay').textContent = subscriberName;
+                    document.getElementById('topic').value = topicFromToken;
+                    document.getElementById('publishTopic').value = topicFromToken;
+
+                    addMessage('received', `Token obtained: ${subscriberName}`, 'Initialization');
+                } else {
+                    console.error('Failed to get token:', response.status);
+                    addMessage('error', `Failed to get token: ${response.status}`, 'Error');
+                }
+            } catch (error) {
+                console.error('Error getting token:', error);
+                addMessage('error', `Error getting token: ${error.message}`, 'Error');
+            }
+        }
+
+        // Initialize on page load
+        window.addEventListener('DOMContentLoaded', initializeToken);
 
         function addMessage(type, content, label = '') {
             const messagesDiv = document.getElementById('messages');
@@ -316,7 +365,6 @@
 
         async function subscribe() {
             const topic = document.getElementById('topic').value.trim();
-            const subscriberName = document.getElementById('subscriberName').value.trim();
             const events = document.getElementById('events').value.trim();
             const hubEndpoint = getHubEndpoint();
 
@@ -336,11 +384,18 @@
                 subscribeFormData.append('hub.lease', '7200');
                 subscribeFormData.append('subscriber.name', subscriberName);
 
+                const headers = {
+                    'Content-Type': 'application/x-www-form-urlencoded'
+                };
+                
+                // Add Authorization header if we have a token
+                if (accessToken) {
+                    headers['Authorization'] = `Bearer ${accessToken}`;
+                }
+
                 const response = await fetch(hubEndpoint, {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/x-www-form-urlencoded'
-                    },
+                    headers: headers,
                     body: subscribeFormData
                 });
 
@@ -475,7 +530,6 @@
 
             try {
                 const topic = document.getElementById('topic').value.trim();
-                const subscriberName = document.getElementById('subscriberName').value.trim();
                 const events = document.getElementById('events').value.trim();
                 const hubEndpoint = getHubEndpoint();
 
@@ -489,11 +543,18 @@
                 subscribeFormData.append('hub.lease', '7200');
                 subscribeFormData.append('subscriber.name', subscriberName);
 
+                const headers = {
+                    'Content-Type': 'application/x-www-form-urlencoded'
+                };
+                
+                // Add Authorization header if we have a token
+                if (accessToken) {
+                    headers['Authorization'] = `Bearer ${accessToken}`;
+                }
+
                 const response = await fetch(hubEndpoint, {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/x-www-form-urlencoded'
-                    },
+                    headers: headers,
                     body: subscribeFormData
                 });
 

@@ -72,6 +72,7 @@ class CastHub:
         self.audit_log_counter: int = 0  # Incrementing message number
         self.server_port = 2017
         self.user_count = 0
+        self.product_counts: Dict[str, int] = {}  # Track counts per productName
         self.page_loads = 0
         self.app_logs: List[str] = []  # Store recent logs
         self.max_logs = 100  # Keep last 100 log entries
@@ -1015,16 +1016,61 @@ async def trigger_admin_refresh():
 
 
 @app.post("/oauth/token")
-async def post_oauth_token():
+async def post_oauth_token(request: Request):
     """Handle POST /oauth/token - OAuth token endpoint"""
-    cast_hub.user_count += 1
+    # Parse request data (form data or JSON)
+    content_type = request.headers.get("content-type", "")
+    request_data = {}
+    
+    if "application/json" in content_type:
+        try:
+            request_data = await request.json()
+        except:
+            pass
+    else:
+        # Try form data
+        try:
+            form_data = await request.form()
+            request_data = dict(form_data)
+        except:
+            try:
+                body = await request.body()
+                if body:
+                    from urllib.parse import parse_qs
+                    parsed = parse_qs(body.decode())
+                    request_data = {k: v[0] if len(v) == 1 else v for k, v in parsed.items()}
+            except:
+                pass
+    
+    # Also check query parameters
+    query_params = dict(request.query_params)
+    request_data.update(query_params)
+    
+    # Check if client_product_Name is provided
+    client_product_name = request_data.get("client_product_Name")
+    
+    if client_product_name:
+        # Increment count for this client_product_Name
+        if client_product_name not in cast_hub.product_counts:
+            cast_hub.product_counts[client_product_name] = 0
+        cast_hub.product_counts[client_product_name] += 1
+        topic = f"{client_product_name}-{cast_hub.product_counts[client_product_name]}"
+        count = cast_hub.product_counts[client_product_name]
+    else:
+        # Use default user-{count} format
+        cast_hub.user_count += 1
+        topic = f"user-{cast_hub.user_count}"
+        count = cast_hub.user_count
+
+    user_name=topic
     response = {
         "token_type": "Bearer",
         "expires_in": 3600,
         "scope": "openid",
-        "topic": f"user-{cast_hub.user_count}",
-        "id_token": f"mock_id_token_{cast_hub.user_count}",
-        "access_token": f"mock_access_token_{cast_hub.user_count}"
+        "topic": topic,
+        "id_token": f"mock_id_token_{count}",
+        "access_token": f"mock_access_token_{count}",
+        "user_name": user_name
     }
     return response
 
