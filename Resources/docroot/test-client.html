@@ -202,13 +202,19 @@
 
         <div class="section">
             <h2>Publish</h2>
-            <div class="form-group">
-                <label for="eventType">Event Type:</label>
-                <input type="text" id="eventType" list="eventTypeOptions" value="imagingstudy-open" placeholder="e.g., imagingstudy-open, imagingstudy-close">
-                <datalist id="eventTypeOptions">
-                    <option value="imagingstudy-open">
-                    <option value="imagingstudy-close">
-                </datalist>
+            <div class="form-group" style="display: flex; gap: 15px; align-items: flex-end;">
+                <div style="flex: 1;">
+                    <label for="eventType">Event Type:</label>
+                    <input type="text" id="eventType" list="eventTypeOptions" value="imagingstudy-open" placeholder="e.g., imagingstudy-open, imagingstudy-close">
+                    <datalist id="eventTypeOptions">
+                        <option value="imagingstudy-open">
+                        <option value="imagingstudy-close">
+                    </datalist>
+                </div>
+                <div style="flex: 1;">
+                    <label for="publishTopic">Topic:</label>
+                    <input type="text" id="publishTopic" value="test-topic" placeholder="Enter topic name">
+                </div>
             </div>
             <div class="form-group">
                 <label for="eventData">Event Data (JSON):</label>
@@ -250,19 +256,15 @@
   }
 ]</textarea>
             </div>
-            <div style="display: flex; gap: 15px; align-items: flex-end; margin-top: 15px;">
+            <div style="margin-top: 15px;">
                 <button id="publishBtn" onclick="publish()">Publish</button>
-                <div style="flex: 1; display: flex; align-items: center; gap: 10px; margin-bottom: 0;">
-                    <label for="publishTopic" style="display: inline-block; margin-bottom: 0; white-space: nowrap;">Topic:</label>
-                    <input type="text" id="publishTopic" value="test-topic" placeholder="Enter topic name" style="flex: 1;">
-                </div>
             </div>
             
             <div id="publishStatus"></div>
         </div>
 
         <div class="section">
-            <h2>Received Messages</h2>
+            <h2>Received Messages <span id="messageCount" style="font-weight: normal; color: #90A4AE; margin-left: 10px;">(0)</span></h2>
             <button onclick="clearMessages()">Clear Messages</button>
             <div id="messages" class="messages"></div>
         </div>
@@ -275,6 +277,7 @@
         let accessToken = null;
         let subscriberName = null;
         let topicFromToken = null;
+        let messageCount = 0;
 
         // Hub configuration
         const hubConfigs = {
@@ -341,6 +344,10 @@
             `;
             
             messagesDiv.insertBefore(messageDiv, messagesDiv.firstChild);
+            
+            // Increment and update message count
+            messageCount++;
+            document.getElementById('messageCount').textContent = `(${messageCount})`;
             
             // Keep only last 50 messages
             while (messagesDiv.children.length > 50) {
@@ -558,8 +565,8 @@
                     body: subscribeFormData
                 });
 
-                // Check specifically for 202 status like reference code
-                if (response.status == 202) {
+                // Check for success status (200 OK or 202 Accepted)
+                if (response.status == 200 || response.status == 202) {
                     const subscriptionResponse = await response.json();
                     console.log('Unsubscribe successfully from hub');
                     addMessage('sent', `Unsubscribed from topic: ${topic}`, 'Unsubscribe');
@@ -641,6 +648,8 @@
 
         function clearMessages() {
             document.getElementById('messages').innerHTML = '';
+            messageCount = 0;
+            document.getElementById('messageCount').textContent = '(0)';
         }
 
         // Clean up on page unload
