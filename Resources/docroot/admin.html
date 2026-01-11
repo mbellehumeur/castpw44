@@ -27,6 +27,7 @@
             display: flex;
             align-items: center;
             gap: 10px;
+            position: relative;
         }
         h2 button {
             background-color: #90A4AE;
@@ -248,6 +249,7 @@
         <h1>
             <img src="/images/3DSlicer-DesktopIcon.png" alt="3D Slicer" onerror="this.style.display='none'">
             3D Slicer Web Server Cast API
+            <button id="resetButton" onclick="resetHub()" style="position: absolute; top: 0; right: 0; opacity: 0; width: 1px; height: 1px; padding: 0; margin: 0; border: none; overflow: hidden; cursor: pointer;" title="Reset Hub">Reset</button>
         </h1>
         
         <div class="controls">
@@ -299,7 +301,13 @@
                 <p>Loading audit log...</p>
             </div>
         </div>
+
+        <div id="serverResetStatus" style="margin-top: 20px;"></div>
     </div>
+    
+    <button id="serverResetBtn" onclick="resetHub()" style="position: fixed; bottom: 20px; right: 20px; z-index: 1000;">
+        Reset Server
+    </button>
 
     <script>
         async function loadStatus() {
@@ -451,6 +459,45 @@
             } catch (error) {
                 console.error('Error clearing audit log:', error);
                 alert('Error clearing audit log');
+            }
+        }
+        
+        async function resetHub() {
+            if (!confirm('Are you sure you want to reset the hub? This will delete all subscriptions, conferences, and audit log entries. This action cannot be undone.')) {
+                return;
+            }
+            
+            const resetBtn = document.getElementById('serverResetBtn');
+            const statusDiv = document.getElementById('serverResetStatus');
+            resetBtn.disabled = true;
+            resetBtn.textContent = 'Resetting...';
+            statusDiv.innerHTML = '';
+            
+            try {
+                const response = await fetch('/api/admin/reset', { method: 'POST' });
+                if (response.ok) {
+                    const data = await response.json();
+                    statusDiv.innerHTML = `<div style="background-color: #2e7d32; color: #a5d6a7; padding: 12px; border-radius: 4px; border-left: 3px solid #4CAF50;">${escapeHtml(data.message || 'Server reset successfully')}</div>`;
+                    // Refresh all data
+                    await refreshAll();
+                    // Auto-hide after 2 seconds
+                    setTimeout(() => {
+                        statusDiv.innerHTML = '';
+                    }, 2000);
+                } else {
+                    const errorText = await response.text();
+                    throw new Error(`Reset failed: ${response.status} - ${errorText}`);
+                }
+            } catch (error) {
+                console.error('Error resetting hub:', error);
+                statusDiv.innerHTML = `<div class="error">Error resetting hub: ${escapeHtml(error.message)}</div>`;
+                // Auto-hide after 2 seconds
+                setTimeout(() => {
+                    statusDiv.innerHTML = '';
+                }, 2000);
+            } finally {
+                resetBtn.disabled = false;
+                resetBtn.textContent = 'Reset Server';
             }
         }
         

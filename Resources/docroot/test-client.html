@@ -156,6 +156,49 @@
             margin: 10px 0;
             border-left: 3px solid #4CAF50;
         }
+        .section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            cursor: pointer;
+            user-select: none;
+        }
+        .section-header:hover {
+            color: #90A4AE;
+        }
+        .section-header h2 {
+            margin: 0;
+            flex: 1;
+        }
+        .toggle-button {
+            background: none;
+            border: none;
+            color: #90A4AE;
+            font-size: 20px;
+            cursor: pointer;
+            padding: 5px 10px;
+            margin: 0;
+            transition: transform 0.2s;
+        }
+        .toggle-button:hover {
+            color: #78909C;
+        }
+        .toggle-button.collapsed {
+            transform: rotate(-90deg);
+        }
+        .collapsible-content {
+            overflow: hidden;
+            transition: max-height 0.3s ease-out, opacity 0.3s ease-out;
+            max-height: 5000px;
+            opacity: 1;
+        }
+        .collapsible-content.collapsed {
+            max-height: 0;
+            opacity: 0;
+            padding-top: 0;
+            padding-bottom: 0;
+            margin: 0;
+        }
     </style>
 </head>
 <body>
@@ -201,24 +244,29 @@
         </div>
 
         <div class="section">
-            <h2>Publish</h2>
-            <div class="form-group" style="display: flex; gap: 15px; align-items: flex-end;">
-                <div style="flex: 1;">
-                    <label for="eventType">Event Type:</label>
-                    <input type="text" id="eventType" list="eventTypeOptions" value="imagingstudy-open" placeholder="e.g., imagingstudy-open, imagingstudy-close">
-                    <datalist id="eventTypeOptions">
-                        <option value="imagingstudy-open">
-                        <option value="imagingstudy-close">
-                    </datalist>
-                </div>
-                <div style="flex: 1;">
-                    <label for="publishTopic">Topic:</label>
-                    <input type="text" id="publishTopic" value="test-topic" placeholder="Enter topic name">
-                </div>
+            <div class="section-header" onclick="toggleSection('publishContent')">
+                <h2>Publish</h2>
+                <button class="toggle-button collapsed" id="publishToggle" onclick="event.stopPropagation(); toggleSection('publishContent')">▶</button>
             </div>
-            <div class="form-group">
-                <label for="eventData">Event Data (JSON):</label>
-                <textarea id="eventData" placeholder='{"key": "value"}'>[
+            <div id="publishContent" class="collapsible-content collapsed">
+                <div class="form-group" style="display: flex; gap: 15px; align-items: flex-end;">
+                    <div style="flex: 1;">
+                        <label for="eventType">Event Type:</label>
+                        <select id="eventType" style="width: 100%;" onchange="handleEventTypeChange()">
+                            <option value="imagingstudy-open" selected>imagingstudy-open</option>
+                            <option value="imagingstudy-close">imagingstudy-close</option>
+                            <option value="custom">Other (custom)</option>
+                        </select>
+                        <input type="text" id="eventTypeCustom" placeholder="Enter custom event type" style="display: none; margin-top: 10px; width: 100%;">
+                    </div>
+                    <div style="flex: 1;">
+                        <label for="publishTopic">Topic:</label>
+                        <input type="text" id="publishTopic" value="test-topic" placeholder="Enter topic name">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="eventData">Event Data (JSON):</label>
+                    <textarea id="eventData" placeholder='{"key": "value"}'>[
   {
     "key": "patient",
     "resource": {
@@ -255,12 +303,46 @@
     }
   }
 ]</textarea>
+                </div>
+                <div style="margin-top: 15px;">
+                    <button id="publishBtn" onclick="publish()">Publish</button>
+                </div>
+                
+                <div id="publishStatus"></div>
             </div>
-            <div style="margin-top: 15px;">
-                <button id="publishBtn" onclick="publish()">Publish</button>
+        </div>
+
+        <div class="section">
+            <div class="section-header" onclick="toggleSection('conferencingContent')">
+                <h2>Conference</h2>
+                <button class="toggle-button collapsed" id="conferencingToggle" onclick="event.stopPropagation(); toggleSection('conferencingContent')">▶</button>
             </div>
-            
-            <div id="publishStatus"></div>
+            <div id="conferencingContent" class="collapsible-content collapsed">
+                <div class="form-group" style="display: flex; gap: 15px; align-items: flex-end;">
+                    <div style="flex: 1;">
+                        <label for="conferenceTopic">Topic:</label>
+                        <input type="text" id="conferenceTopic" value="test-topic" placeholder="Enter topic name">
+                    </div>
+                    <div style="flex: 1;">
+                        <label for="conferenceName">Conference Name:</label>
+                        <input type="text" id="conferenceName" placeholder="Enter conference name">
+                    </div>
+                    <div id="conferenceStatus" class="status disconnected" style="flex: 0 0 auto; margin-bottom: 0;">
+                        <strong>Status:</strong> <span id="conferenceStatusText">Not in conference</span>
+                    </div>
+                </div>
+                <div style="display: flex; gap: 10px; align-items: center; margin-top: 15px;">
+                    <button id="joinConferenceBtn" onclick="joinConference()">Join Conference</button>
+                    <button id="leaveConferenceBtn" onclick="leaveConference()" disabled>Leave Conference</button>
+                    <div id="conferenceActionStatus" style="flex: 1;"></div>
+                </div>
+                <div class="form-group" style="margin-top: 20px;">
+                    <label>Participants:</label>
+                    <div id="participantsList" style="background-color: #2b2b2b; padding: 15px; border-radius: 4px; min-height: 50px; color: #b0b0b0;">
+                        No participants
+                    </div>
+                </div>
+            </div>
         </div>
 
         <div class="section">
@@ -360,7 +442,7 @@
             statusDiv.innerHTML = `<div class="${isError ? 'error' : 'success'}">${message}</div>`;
             setTimeout(() => {
                 statusDiv.innerHTML = '';
-            }, 5000);
+            }, 2000);
         }
 
         function updateConnectionStatus(status, text) {
@@ -598,8 +680,14 @@
 
         async function publish() {
             const topic = document.getElementById('publishTopic').value.trim();
-            const eventType = document.getElementById('eventType').value.trim();
+            const eventTypeSelect = document.getElementById('eventType');
+            const eventTypeCustom = document.getElementById('eventTypeCustom');
             const eventDataText = document.getElementById('eventData').value.trim();
+
+            // Use custom input value if "custom" is selected, otherwise use dropdown value
+            const eventType = eventTypeSelect.value === 'custom' 
+                ? eventTypeCustom.value.trim() 
+                : eventTypeSelect.value.trim();
 
             if (!topic || !eventType) {
                 showStatus('publishStatus', 'Topic and Event Type are required', true);
@@ -650,6 +738,115 @@
             document.getElementById('messages').innerHTML = '';
             messageCount = 0;
             document.getElementById('messageCount').textContent = '(0)';
+        }
+
+        function handleEventTypeChange() {
+            const eventTypeSelect = document.getElementById('eventType');
+            const customInput = document.getElementById('eventTypeCustom');
+            if (eventTypeSelect.value === 'custom') {
+                customInput.style.display = 'block';
+                customInput.focus();
+            } else {
+                customInput.style.display = 'none';
+            }
+        }
+
+        function toggleSection(contentId) {
+            const content = document.getElementById(contentId);
+            const toggleButton = document.getElementById(contentId === 'publishContent' ? 'publishToggle' : 'conferencingToggle');
+            
+            if (content.classList.contains('collapsed')) {
+                content.classList.remove('collapsed');
+                toggleButton.classList.remove('collapsed');
+                toggleButton.textContent = '▼';
+            } else {
+                content.classList.add('collapsed');
+                toggleButton.classList.add('collapsed');
+                toggleButton.textContent = '▶';
+            }
+        }
+
+        let inConference = false;
+        let conferenceParticipants = [];
+
+        function updateConferenceStatus(status, text) {
+            const statusDiv = document.getElementById('conferenceStatus');
+            const statusText = document.getElementById('conferenceStatusText');
+            statusDiv.className = `status ${status}`;
+            statusText.textContent = text;
+        }
+
+        function updateParticipantsList() {
+            const participantsDiv = document.getElementById('participantsList');
+            if (conferenceParticipants.length === 0) {
+                participantsDiv.textContent = 'No participants';
+                participantsDiv.style.color = '#b0b0b0';
+            } else {
+                participantsDiv.innerHTML = conferenceParticipants.map(p => 
+                    `<div style="padding: 5px 0; border-bottom: 1px solid #555;">${p}</div>`
+                ).join('');
+                participantsDiv.style.color = '#e0e0e0';
+            }
+        }
+
+        async function joinConference() {
+            const topic = document.getElementById('conferenceTopic').value.trim();
+            const conferenceName = document.getElementById('conferenceName').value.trim();
+
+            if (!topic) {
+                showStatus('conferenceActionStatus', 'Topic is required', true);
+                return;
+            }
+
+            try {
+                updateConferenceStatus('connecting', 'Joining...');
+                
+                // Add current user to participants if not already there
+                if (subscriberName && !conferenceParticipants.includes(subscriberName)) {
+                    conferenceParticipants.push(subscriberName);
+                    updateParticipantsList();
+                }
+
+                inConference = true;
+                document.getElementById('joinConferenceBtn').disabled = true;
+                document.getElementById('leaveConferenceBtn').disabled = false;
+                updateConferenceStatus('connected', `In conference: ${conferenceName || topic}`);
+                
+                addMessage('sent', `Joined conference: ${conferenceName || topic}`, 'Conference');
+                showStatus('conferenceActionStatus', 'Joined conference successfully');
+
+            } catch (error) {
+                console.error('Join conference error:', error);
+                addMessage('error', `Join conference error: ${error.message}`, 'Error');
+                showStatus('conferenceActionStatus', `Error: ${error.message}`, true);
+                updateConferenceStatus('disconnected', 'Not in conference');
+            }
+        }
+
+        async function leaveConference() {
+            try {
+                const topic = document.getElementById('conferenceTopic').value.trim();
+                const conferenceName = document.getElementById('conferenceName').value.trim();
+
+                // Remove current user from participants
+                if (subscriberName) {
+                    conferenceParticipants = conferenceParticipants.filter(p => p !== subscriberName);
+                    updateParticipantsList();
+                }
+
+                inConference = false;
+                document.getElementById('joinConferenceBtn').disabled = false;
+                document.getElementById('leaveConferenceBtn').disabled = true;
+                updateConferenceStatus('disconnected', 'Not in conference');
+                
+                addMessage('sent', `Left conference: ${conferenceName || topic}`, 'Conference');
+                showStatus('conferenceActionStatus', 'Left conference successfully');
+
+            } catch (error) {
+                console.error('Leave conference error:', error);
+                addMessage('error', `Leave conference error: ${error.message}`, 'Error');
+                showStatus('conferenceActionStatus', `Error: ${error.message}`, true);
+            }
         }
 
         // Clean up on page unload

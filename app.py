@@ -381,6 +381,19 @@ class CastHub:
         """Clear all entries from the audit log"""
         self.audit_log.clear()
         print("[LOG] Audit log cleared")
+    
+    def reset_all(self):
+        """Reset everything - clear subscriptions, conferences, and audit log (like restarting the service)"""
+        # Clear all data
+        self.subscriptions.clear()
+        # WebSocket connections will be closed when clients disconnect naturally
+        self.websocket_connections.clear()
+        self.conferences.clear()
+        self.audit_log.clear()
+        self.audit_log_counter = 0
+        self.last_context.clear()
+        
+        print("[LOG] Hub reset - all subscriptions, conferences, and audit log cleared")
 
 
 # Global Cast Hub instance
@@ -1013,6 +1026,17 @@ async def trigger_admin_refresh():
     """Trigger refresh command to all connected admin clients"""
     await cast_hub.send_admin_refresh_command()
     return {"status": "sent", "clients": len(cast_hub.admin_websockets)}
+
+
+@app.post("/api/admin/reset")
+async def reset_hub():
+    """Reset the hub - clear all subscriptions, conferences, and audit log (like restarting the service)"""
+    cast_hub.reset_all()
+    
+    # Send refresh command to admin clients
+    await cast_hub.send_admin_refresh_command()
+    
+    return {"status": "reset", "message": "All subscriptions, conferences, and audit log cleared"}
 
 
 @app.post("/oauth/token")
