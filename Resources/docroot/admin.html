@@ -29,6 +29,21 @@
             gap: 10px;
             position: relative;
         }
+        .header-actions {
+            position: absolute;
+            top: 0;
+            right: 0;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        .header-actions button {
+            transition: background-color 0.2s, border-color 0.2s;
+        }
+        .header-actions button:hover {
+            background-color: #78909C !important;
+            border-color: #90A4AE !important;
+        }
         h2 button {
             background-color: #90A4AE;
             color: white;
@@ -258,7 +273,12 @@
         <h1>
             <img src="/images/3DSlicer-DesktopIcon.png" alt="3D Slicer" onerror="this.style.display='none'">
             3D Slicer Web Server Cast API
-            <button id="resetButton" onclick="resetHub()" style="position: absolute; top: 0; right: 0; opacity: 0; width: 1px; height: 1px; padding: 0; margin: 0; border: none; overflow: hidden; cursor: pointer;" title="Reset Hub">Reset</button>
+            <div class="header-actions">
+                <button onclick="window.open('/test-client', '_blank')" style="background-color: #90A4AE; color: white; border: 1px solid #78909C;">
+                    Open test client
+                </button>
+                <button id="resetButton" onclick="resetHub()" style="opacity: 0; width: 1px; height: 1px; padding: 0; margin: 0; border: none; overflow: hidden; cursor: pointer;" title="Reset Hub">Reset</button>
+            </div>
         </h1>
         
         <div class="controls">
