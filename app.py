@@ -382,18 +382,38 @@ class CastHub:
         self.audit_log.clear()
         print("[LOG] Audit log cleared")
     
-    def reset_all(self):
+    async def reset_all(self):
         """Reset everything - clear subscriptions, conferences, and audit log (like restarting the service)"""
+        # Close all WebSocket connections
+        disconnected_endpoints = []
+        for endpoint, websocket in list(self.websocket_connections.items()):
+            try:
+                await websocket.close()
+                self.log(f"WebSocket closed for endpoint: {endpoint}")
+            except Exception as e:
+                self.log(f"Error closing WebSocket for endpoint {endpoint}: {e}")
+            disconnected_endpoints.append(endpoint)
+        
+        # Close all admin WebSocket connections
+        disconnected_admin = []
+        for websocket in list(self.admin_websockets):
+            try:
+                await websocket.close()
+                self.log("Admin WebSocket closed")
+            except Exception as e:
+                self.log(f"Error closing admin WebSocket: {e}")
+            disconnected_admin.append(websocket)
+        
         # Clear all data
         self.subscriptions.clear()
-        # WebSocket connections will be closed when clients disconnect naturally
         self.websocket_connections.clear()
+        self.admin_websockets.clear()
         self.conferences.clear()
         self.audit_log.clear()
         self.audit_log_counter = 0
         self.last_context.clear()
         
-        print("[LOG] Hub reset - all subscriptions, conferences, and audit log cleared")
+        self.log(f"Hub reset - all subscriptions, conferences, audit log cleared, and {len(disconnected_endpoints)} WebSocket(s) disconnected")
 
 
 # Global Cast Hub instance
@@ -1031,12 +1051,11 @@ async def trigger_admin_refresh():
 @app.post("/api/admin/reset")
 async def reset_hub():
     """Reset the hub - clear all subscriptions, conferences, and audit log (like restarting the service)"""
-    cast_hub.reset_all()
+    await cast_hub.reset_all()
     
-    # Send refresh command to admin clients
-    await cast_hub.send_admin_refresh_command()
+    # Note: No need to send refresh command since all admin websockets were just closed
     
-    return {"status": "reset", "message": "All subscriptions, conferences, and audit log cleared"}
+    return {"status": "reset", "message": "All subscriptions, conferences, audit log cleared, and all WebSocket connections disconnected"}
 
 
 @app.post("/oauth/token")
@@ -1071,7 +1090,7 @@ async def post_oauth_token(request: Request):
     request_data.update(query_params)
     
     # Check if client_product_Name is provided
-    client_product_name = request_data.get("client_product_Name")
+    client_product_name = request_data.get("client_product_name")
     
     if client_product_name:
         # Increment count for this client_product_Name
@@ -1091,7 +1110,8 @@ async def post_oauth_token(request: Request):
         "token_type": "Bearer",
         "expires_in": 3600,
         "scope": "openid",
-        "topic": topic,
+        # "topic": topic,
+        "topic": "CAST-USER-1",
         "id_token": f"mock_id_token_{count}",
         "access_token": f"mock_access_token_{count}",
         "user_name": user_name

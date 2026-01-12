@@ -113,6 +113,15 @@
             font-weight: 500;
             color: #66b3ff;
         }
+        /* Make Subscriber and Topic columns wider in subscriptions table */
+        #subscriptionsTable table th:nth-child(1),
+        #subscriptionsTable table td:nth-child(1) {
+            min-width: 120px;
+        }
+        #subscriptionsTable table th:nth-child(2),
+        #subscriptionsTable table td:nth-child(2) {
+            min-width: 120px;
+        }
         .no-subscriptions {
             text-align: center;
             padding: 40px;
@@ -261,7 +270,7 @@
 
         <div class="stats">
             <div class="stat-card">
-                <h3>Total Subscriptions</h3>
+                <h3>Active Subscriptions</h3>
                 <div class="value" id="totalSubscriptions">-</div>
             </div>
             <div class="stat-card">
