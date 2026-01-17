@@ -994,11 +994,20 @@ async def post_hub_topic(topic: str, request: Request):
         
         # Handle conferences - broadcast to attendees (skip if already sent)
         for conference in cast_hub.conferences:
-            if conference.get("user") == topic_name:
-                for attendee_topic in conference.get("topics", []):
-                    # Find subscriptions for attendee
+            conference_user = conference.get("user")
+            attendee_topics = conference.get("topics", [])
+            
+            # Check if message is from any conference participant (host or attendee)
+            is_participant = (conference_user == topic_name) or (topic_name in attendee_topics)
+            
+            if is_participant:
+                # Send to all participants (host + all attendees)
+                all_participants = [conference_user] + attendee_topics
+                
+                for participant_topic in all_participants:
+                    # Find subscriptions for participant
                     for sub in cast_hub.subscriptions:
-                        if sub.get("topic") == attendee_topic and sub.get("channel") == "websocket":
+                        if sub.get("topic") == participant_topic and sub.get("channel") == "websocket":
                             endpoint = sub.get("websocket_endpoint")
                             if endpoint and endpoint in cast_hub.websocket_connections:
                                 # Skip if already sent to this endpoint
@@ -1007,13 +1016,13 @@ async def post_hub_topic(topic: str, request: Request):
                                 try:
                                     websocket = cast_hub.websocket_connections[endpoint]
                                     await websocket.send_text(notification_json)
-                                    cast_hub.log(f"Sent conference message to attendee: {attendee_topic}")
+                                    cast_hub.log(f"Sent conference message to participant: {participant_topic}")
                                     # Track this endpoint as having received the message
                                     sent_endpoints.add(endpoint)
                                     # Log sent conference message
                                     cast_hub.add_audit_log(
                                         user=sub.get("subscriber", "unknown"),
-                                        topic=attendee_topic,
+                                        topic=participant_topic,
                                         event_name=event_type,
                                         event_data=context,
                                         direction="sent"
