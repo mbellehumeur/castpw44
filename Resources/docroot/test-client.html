@@ -209,7 +209,7 @@
                 3D Slicer Cast Test Client
             </span>
             <span style="font-weight: normal; color: #90A4AE; font-size: 24px;">
-                User: <span id="subscriberNameDisplay"></span>
+                ID: <span id="subscriberNameDisplay"></span>
             </span>
         </h1>
         
@@ -232,6 +232,10 @@
                     <label for="events">Events:</label>
                     <input type="text" id="events" value="*" placeholder="* or update,close">
                 </div>
+                <div class="form-group" style="flex: 1; min-width: 150px; margin-bottom: 0;">
+                    <label for="subscriberName">Subscriber:</label>
+                    <input type="text" id="subscriberName" placeholder="Auto-filled from token">
+                </div>
                 <div id="connectionStatus" class="status disconnected" style="flex: 0 0 auto; margin-bottom: 0;">
                     <strong>Status:</strong> <span id="statusText">Not connected</span>
                 </div>
@@ -244,11 +248,8 @@
         </div>
 
         <div class="section">
-            <div class="section-header" onclick="toggleSection('publishContent')">
-                <h2>Publish</h2>
-                <button class="toggle-button collapsed" id="publishToggle" onclick="event.stopPropagation(); toggleSection('publishContent')">▶</button>
-            </div>
-            <div id="publishContent" class="collapsible-content collapsed">
+            <h2>Publish</h2>
+            <div id="publishContent">
                 <div class="form-group" style="display: flex; gap: 15px; align-items: flex-end;">
                     <div style="flex: 1;">
                         <label for="eventType">Event Type:</label>
@@ -313,35 +314,9 @@
         </div>
 
         <div class="section">
-            <div class="section-header" onclick="toggleSection('conferencingContent')">
-                <h2>Collaborate</h2>
-                <button class="toggle-button collapsed" id="conferencingToggle" onclick="event.stopPropagation(); toggleSection('conferencingContent')">▶</button>
-            </div>
-            <div id="conferencingContent" class="collapsible-content collapsed">
-                <div class="form-group" style="display: flex; gap: 15px; align-items: flex-end;">
-                    <div style="flex: 1;">
-                        <label for="conferenceTopic">Topic:</label>
-                        <input type="text" id="conferenceTopic" value="test-topic" placeholder="Enter topic name">
-                    </div>
-                    <div style="flex: 1;">
-                        <label for="conferenceName">Conference Name:</label>
-                        <input type="text" id="conferenceName" placeholder="Enter conference name">
-                    </div>
-                    <div id="conferenceStatus" class="status disconnected" style="flex: 0 0 auto; margin-bottom: 0;">
-                        <strong>Status:</strong> <span id="conferenceStatusText">Not in conference</span>
-                    </div>
-                </div>
-                <div style="display: flex; gap: 10px; align-items: center; margin-top: 15px;">
-                    <button id="joinConferenceBtn" onclick="joinConference()">Join Conference</button>
-                    <button id="leaveConferenceBtn" onclick="leaveConference()" disabled>Leave Conference</button>
-                    <div id="conferenceActionStatus" style="flex: 1;"></div>
-                </div>
-                <div class="form-group" style="margin-top: 20px;">
-                    <label>Participants:</label>
-                    <div id="participantsList" style="background-color: #2b2b2b; padding: 15px; border-radius: 4px; min-height: 50px; color: #b0b0b0;">
-                        No participants
-                    </div>
-                </div>
+            <h2>Collaborate</h2>
+            <div id="conferencingContent">
+                <button onclick="openConferenceClient()">Open Conference Client</button>
             </div>
         </div>
 
@@ -374,29 +349,51 @@
             return hubConfigs[selectedHub] || hubConfigs['local'];
         }
 
+        // Get topic from URL parameter
+        function getTopicFromUrl() {
+            const urlParams = new URLSearchParams(window.location.search);
+            return urlParams.get('topic');
+        }
+
         // Query token endpoint on startup
         async function initializeToken() {
             try {
+                // Get topic from URL if provided
+                const topicFromUrl = getTopicFromUrl();
+                
+                const tokenParams = new URLSearchParams({
+                    'client_product_name': 'TEST-CLIENT'
+                });
+                
+                // Add topic to search parameters if provided in URL
+                if (topicFromUrl) {
+                    tokenParams.append('topic', topicFromUrl);
+                }
+                
                 const response = await fetch('/oauth/token', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/x-www-form-urlencoded'
                     },
-                    body: new URLSearchParams({
-                        'client_product_name': 'TEST-CLIENT'
-                    })
+                    body: tokenParams
                 });
 
                 if (response.ok) {
                     const tokenData = await response.json();
                     accessToken = tokenData.access_token;
-                    subscriberName = tokenData.user_name;
+                   
                     topicFromToken = tokenData.topic;
+                    subscriberName ='TEST-CLIENT-' + tokenData.topic ;
 
                     // Update UI
                     document.getElementById('subscriberNameDisplay').textContent = subscriberName;
-                    document.getElementById('topic').value = topicFromToken;
-                    document.getElementById('publishTopic').value = topicFromToken;
+                    document.getElementById('subscriberName').value = subscriberName;
+                    
+                    // Use topic from URL if provided, otherwise use topic from token
+                    const topicToUse = topicFromUrl || topicFromToken;
+                    
+                    document.getElementById('topic').value = topicToUse;
+                    document.getElementById('publishTopic').value = topicToUse;
 
                     addMessage('received', `Token obtained: ${subscriberName}`, 'Initialization');
                 } else {
@@ -471,7 +468,7 @@
                 subscribeFormData.append('hub.events', events || '*');
                 subscribeFormData.append('hub.topic', topic);
                 subscribeFormData.append('hub.lease', '7200');
-                subscribeFormData.append('subscriber.name', subscriberName);
+                subscribeFormData.append('subscriber.name', 'TEST-CLIENT-'+topic);
 
                 const headers = {
                     'Content-Type': 'application/x-www-form-urlencoded'
@@ -630,7 +627,7 @@
                 subscribeFormData.append('hub.events', events || '*');
                 subscribeFormData.append('hub.topic', topic);
                 subscribeFormData.append('hub.lease', '7200');
-                subscribeFormData.append('subscriber.name', subscriberName);
+                subscribeFormData.append('subscriber.name', 'TEST-CLIENT-'+topic);
 
                 const headers = {
                     'Content-Type': 'application/x-www-form-urlencoded'
@@ -703,8 +700,18 @@
             }
 
             try {
+                // Generate UUID for message id
+                const messageId = crypto.randomUUID ? crypto.randomUUID() : 
+                    'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+                        const r = Math.random() * 16 | 0;
+                        const v = c == 'x' ? r : (r & 0x3 | 0x8);
+                        return v.toString(16);
+                    });
+
                 const payload = {
-                    event: {
+                    "timestamp": new Date().toISOString(),
+                    "id": messageId,
+                    "event": {
                         "hub.topic": topic,
                         "hub.event": eventType,
                         "context": eventData
@@ -749,6 +756,20 @@
             } else {
                 customInput.style.display = 'none';
             }
+        }
+
+        function openConferenceClient() {
+            const topic = document.getElementById('topic').value.trim();
+            if (!subscriberName) {
+                alert('Subscriber name not available. Please wait for initialization.');
+                return;
+            }
+            if (!topic) {
+                alert('Topic is required.');
+                return;
+            }
+            const url = `/api/hub/conference-client?subscriberName=${encodeURIComponent(subscriberName)}&topic=${encodeURIComponent(topic)}`;
+            window.open(url, '_blank');
         }
 
         function toggleSection(contentId) {

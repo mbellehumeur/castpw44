@@ -65,7 +65,9 @@ class CastHub:
     def __init__(self):
         self.subscriptions: List[Dict] = []
         self.websocket_connections: Dict[str, WebSocket] = {}  # endpoint -> WebSocket
-        self.admin_websockets: List[WebSocket] = []  # Track admin connections
+        self.admin_websockets: List[Dict] = []  # Track admin connections with metadata: [{"websocket": WebSocket, "location": str, "connected_at": str}]
+        self.log_websockets: List[Dict] = []  # Track log viewer connections: [{"websocket": WebSocket, "location": str, "connected_at": str}]
+        self.log_queue: List[str] = []  # Queue of new log entries to broadcast
         self.conferences: List[Dict] = []
         self.last_context: Dict[str, Dict] = {}  # topic -> context
         self.audit_log: List[Dict] = []  # List of logged events
@@ -88,6 +90,57 @@ class CastHub:
         # Keep only last max_logs entries
         if len(self.app_logs) > self.max_logs:
             self.app_logs = self.app_logs[-self.max_logs:]
+        
+        # Add to queue for WebSocket broadcasting
+        self.log_queue.append(log_entry)
+        # Keep queue size reasonable
+        if len(self.log_queue) > 1000:
+            self.log_queue = self.log_queue[-1000:]
+    
+    async def broadcast_log(self, log_entry: str):
+        """Broadcast a log entry to all connected log WebSocket clients"""
+        if not self.log_websockets:
+            return
+        
+        disconnected = []
+        for log_client in self.log_websockets:
+            try:
+                await log_client["websocket"].send_json({
+                    "type": "log",
+                    "message": log_entry,
+                    "timestamp": datetime.now().isoformat()
+                })
+            except Exception as e:
+                self.log(f"Error broadcasting log to client: {e}")
+                disconnected.append(log_client["websocket"])
+        
+        # Clean up disconnected websockets
+        for ws in disconnected:
+            self.unregister_log_websocket(ws)
+    
+    def register_log_websocket(self, websocket: WebSocket, location: str = "unknown"):
+        """Register a log viewer WebSocket connection"""
+        # Check if this websocket is already registered
+        for log_client in self.log_websockets:
+            if log_client["websocket"] == websocket:
+                return  # Already registered
+        
+        log_client = {
+            "websocket": websocket,
+            "location": location,
+            "connected_at": datetime.now().isoformat()
+        }
+        self.log_websockets.append(log_client)
+        self.log(f"Log viewer WebSocket registered from {location} (total: {len(self.log_websockets)})")
+    
+    def unregister_log_websocket(self, websocket: WebSocket):
+        """Unregister a log viewer WebSocket connection"""
+        for log_client in self.log_websockets[:]:
+            if log_client["websocket"] == websocket:
+                location = log_client.get("location", "unknown")
+                self.log_websockets.remove(log_client)
+                self.log(f"Log viewer WebSocket unregistered from {location} (remaining: {len(self.log_websockets)})")
+                return
     
     def get_logs(self, count: int = 50) -> List[str]:
         """Get recent log entries"""
@@ -119,7 +172,7 @@ class CastHub:
                 else:
                     return {"status": 500, "data": "Verification failed"}
         except Exception as e:
-            print(f"[LOG] WebSub verification error: {e}")
+            self.log(f"WebSub verification error: {e}")
             return {"status": 500, "data": str(e)}
     
     def add_subscription(self, subscription_data: Dict) -> Dict:
@@ -145,7 +198,7 @@ class CastHub:
                 })
                 
                 if verify_result["status"] != 200:
-                    print(f"[LOG] WebSub verification failed: {verify_result['status']}")
+                    self.log(f"WebSub verification failed: {verify_result['status']}")
                     raise ValueError("WebSub verification failed")
             
             # Generate WebSocket endpoint identifier
@@ -250,19 +303,31 @@ class CastHub:
         if endpoint in self.websocket_connections:
             del self.websocket_connections[endpoint]
             self.remove_subscription(endpoint=endpoint)
-            print(f"[LOG] WebSocket unregistered for endpoint: {endpoint} (remaining: {len(self.websocket_connections)})")
+            self.log(f"WebSocket unregistered for endpoint: {endpoint} (remaining: {len(self.websocket_connections)})")
     
-    def register_admin_websocket(self, websocket: WebSocket):
-        """Register an admin WebSocket connection"""
-        if websocket not in self.admin_websockets:
-            self.admin_websockets.append(websocket)
-            self.log(f"Admin WebSocket registered (total: {len(self.admin_websockets)})")
+    def register_admin_websocket(self, websocket: WebSocket, location: str = "unknown"):
+        """Register an admin WebSocket connection with location info"""
+        # Check if this websocket is already registered
+        for admin_client in self.admin_websockets:
+            if admin_client["websocket"] == websocket:
+                return  # Already registered
+        
+        admin_client = {
+            "websocket": websocket,
+            "location": location,
+            "connected_at": datetime.now().isoformat()
+        }
+        self.admin_websockets.append(admin_client)
+        self.log(f"Admin WebSocket registered from {location} (total: {len(self.admin_websockets)})")
     
     def unregister_admin_websocket(self, websocket: WebSocket):
         """Unregister an admin WebSocket connection"""
-        if websocket in self.admin_websockets:
-            self.admin_websockets.remove(websocket)
-            self.log(f"Admin WebSocket unregistered (remaining: {len(self.admin_websockets)})")
+        for admin_client in self.admin_websockets[:]:
+            if admin_client["websocket"] == websocket:
+                location = admin_client.get("location", "unknown")
+                self.admin_websockets.remove(admin_client)
+                self.log(f"Admin WebSocket unregistered from {location} (remaining: {len(self.admin_websockets)})")
+                return
     
     async def _do_send_admin_refresh(self):
         """Internal method to actually send the refresh command"""
@@ -278,13 +343,12 @@ class CastHub:
         }
         
         disconnected = []
-        for ws in self.admin_websockets:
+        for admin_client in self.admin_websockets:
             try:
-                await ws.send_json(message)
-                self.log("Sent refresh command to admin client")
+                await admin_client["websocket"].send_json(message)
             except Exception as e:
                 self.log(f"Error sending refresh to admin: {e}")
-                disconnected.append(ws)
+                disconnected.append(admin_client["websocket"])
         
         # Clean up disconnected websockets
         for ws in disconnected:
@@ -380,7 +444,7 @@ class CastHub:
     def clear_audit_log(self):
         """Clear all entries from the audit log"""
         self.audit_log.clear()
-        print("[LOG] Audit log cleared")
+        self.log("Audit log cleared")
     
     async def reset_all(self):
         """Reset everything - clear subscriptions, conferences, and audit log (like restarting the service)"""
@@ -396,18 +460,29 @@ class CastHub:
         
         # Close all admin WebSocket connections
         disconnected_admin = []
-        for websocket in list(self.admin_websockets):
+        for admin_client in list(self.admin_websockets):
             try:
-                await websocket.close()
+                await admin_client["websocket"].close()
                 self.log("Admin WebSocket closed")
             except Exception as e:
                 self.log(f"Error closing admin WebSocket: {e}")
-            disconnected_admin.append(websocket)
+            disconnected_admin.append(admin_client["websocket"])
+        
+        # Close all log WebSocket connections
+        disconnected_logs = []
+        for log_client in list(self.log_websockets):
+            try:
+                await log_client["websocket"].close()
+                self.log("Log viewer WebSocket closed")
+            except Exception as e:
+                self.log(f"Error closing log viewer WebSocket: {e}")
+            disconnected_logs.append(log_client["websocket"])
         
         # Clear all data
         self.subscriptions.clear()
         self.websocket_connections.clear()
         self.admin_websockets.clear()
+        self.log_websockets.clear()
         self.conferences.clear()
         self.audit_log.clear()
         self.audit_log_counter = 0
@@ -485,7 +560,11 @@ async def post_conference(request: Request):
         "topics": data.get("topics", [])
     }
     cast_hub.conferences.append(conference)
-    print(f"[LOG] Conference created: {conference.get('title')}")
+    cast_hub.log(f"Conference created: {conference.get('title')}")
+    
+    # Send admin refresh command (rate limited)
+    await cast_hub.send_admin_refresh_command()
+    
     return {"status": "created"}
 
 
@@ -522,7 +601,11 @@ async def delete_conference(request: Request):
             cast_hub.conferences.remove(conf)
             removed.append(conf)
         elif user in conf.get("topics", []):
-            print(f"[LOG] User {user} exited conference {conf.get('title')}")
+            cast_hub.log(f"User {user} exited conference {conf.get('title')}")
+    
+    # Send admin refresh command if conferences were removed (rate limited)
+    if len(removed) > 0:
+        await cast_hub.send_admin_refresh_command()
     
     return {"removed": len(removed)}
 
@@ -554,13 +637,42 @@ async def post_status():
     return Response(content=status_msg, media_type="text/plain")
 
 
-@app.get("/test-client")
-@app.get("/test-client/")
+@app.get("/api/hub/test-client")
+@app.get("/api/hub/test-client/")
 async def get_test_client(request: Request):
     """Get test client page for subscribing and publishing"""
-    # Redirect to static mount - simpler and more reliable
+    # Use the same path resolution as the static mount
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    html_path = os.path.join(base_dir, "Resources", "docroot", "test-client.html")
+    
+    if os.path.exists(html_path):
+        # Read and return the file content directly
+        with open(html_path, 'r', encoding='utf-8') as f:
+            html_content = f.read()
+        return Response(content=html_content, media_type="text/html")
+    
+    # If file not found, try redirecting to static mount
     from fastapi.responses import RedirectResponse
-    return RedirectResponse(url="/static/test-client.html", status_code=301)
+    return RedirectResponse(url="/static/test-client.html", status_code=302)
+
+
+@app.get("/api/hub/conference-client")
+@app.get("/api/hub/conference-client/")
+async def get_conference_client(request: Request):
+    """Get conference client page"""
+    # Use the same path resolution as the static mount
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    html_path = os.path.join(base_dir, "Resources", "docroot", "conference-client.html")
+    
+    if os.path.exists(html_path):
+        # Read and return the file content directly
+        with open(html_path, 'r', encoding='utf-8') as f:
+            html_content = f.read()
+        return Response(content=html_content, media_type="text/html")
+    
+    # If file not found, try redirecting to static mount
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url="/static/conference-client.html", status_code=302)
 
 
 @app.get("/api/hub/admin")
@@ -582,6 +694,25 @@ async def get_hub_status(request: Request):
     return RedirectResponse(url="/static/admin.html", status_code=302)
 
 
+@app.get("/api/hub/logs")
+@app.get("/api/hub/logs/")
+async def get_logs_viewer(request: Request):
+    """Get logs viewer page"""
+    # Use the same path resolution as the static mount
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    html_path = os.path.join(base_dir, "Resources", "docroot", "logs.html")
+    
+    if os.path.exists(html_path):
+        # Read and return the file content directly
+        with open(html_path, 'r', encoding='utf-8') as f:
+            html_content = f.read()
+        return Response(content=html_content, media_type="text/html")
+    
+    # If file not found, try redirecting to static mount
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url="/static/logs.html", status_code=302)
+
+
 @app.get("/api/hub/status")
 async def get_hub_status_json():
     """Get hub status as JSON"""
@@ -592,6 +723,7 @@ async def get_hub_status_json():
         "total_websockets": len(cast_hub.websocket_connections),
         "total_topics": len(set(sub.get("topic") for sub in subscriptions if sub.get("topic"))),
         "total_messages": len(cast_hub.audit_log),
+        "total_admin_clients": len(cast_hub.admin_websockets),
         "subscriptions": subscriptions,
         "websocket_endpoints": list(cast_hub.websocket_connections.keys()),
         "topics": list(set(sub.get("topic") for sub in subscriptions if sub.get("topic")))
@@ -742,12 +874,13 @@ async def post_hub_topic(topic: str, request: Request):
     """Handle POST /api/hub/{topic} - receive events and broadcast to subscribers"""
     try:
         notification = await request.json()
-        print(f"[LOG] Received event for topic {topic}: {notification.get('event', {}).get('hub.event', 'unknown')}")
+        message_id = notification.get("id", "unknown")
+        event = notification.get("event", {})
+        event_type = event.get("hub.event", "unknown")
+        cast_hub.log(f"Received cast message ID: {message_id} for topic {topic}, event: {event_type}")
         
         # Broadcast to subscribers (sync method, but WebSocket sending needs async)
-        event = notification.get("event", {})
         topic_name = event.get("hub.topic", "")
-        event_type = event.get("hub.event", "")
         context = event.get("context", {})
         
         # Update lastContext
@@ -771,6 +904,9 @@ async def post_hub_topic(topic: str, request: Request):
         
         # Calculate HMAC signature
         notification_json = json.dumps(notification)
+        
+        # Track endpoints that have already received the message to prevent duplicates
+        sent_endpoints = set()
         
         # Send to matching subscriptions
         for sub in cast_hub.subscriptions[:]:  # Copy to allow removal
@@ -797,7 +933,9 @@ async def post_hub_topic(topic: str, request: Request):
                         websocket = cast_hub.websocket_connections[endpoint]
                         # FastAPI WebSocket.send_text() is async - await it
                         await websocket.send_text(notification_json)
-                        print(f"[LOG] Sent WebSocket message to {sub.get('subscriber')} via endpoint {endpoint}")
+                        cast_hub.log(f"Sent WebSocket message to {sub.get('subscriber')} via endpoint {endpoint}")
+                        # Track this endpoint as having received the message
+                        sent_endpoints.add(endpoint)
                         # Log sent message
                         cast_hub.add_audit_log(
                             user=sub.get("subscriber", "unknown"),
@@ -807,17 +945,17 @@ async def post_hub_topic(topic: str, request: Request):
                             direction="sent"
                         )
                     except Exception as e:
-                        print(f"[LOG] WebSocket send error for {endpoint}: {type(e).__name__}: {e}")
-                        print(f"[LOG] Removing failed WebSocket connection and subscription")
+                        cast_hub.log(f"WebSocket send error for {endpoint}: {type(e).__name__}: {e}")
+                        cast_hub.log(f"Removing failed WebSocket connection and subscription")
                         if endpoint in cast_hub.websocket_connections:
                             del cast_hub.websocket_connections[endpoint]
                         if sub in cast_hub.subscriptions:
                             cast_hub.subscriptions.remove(sub)
                 else:
                     if not endpoint:
-                        print(f"[LOG] WebSocket endpoint not set for subscription: {sub.get('subscriber')}")
+                        cast_hub.log(f"WebSocket endpoint not set for subscription: {sub.get('subscriber')}")
                     else:
-                        print(f"[LOG] WebSocket not bound for subscription: {sub.get('subscriber')}")
+                        cast_hub.log(f"WebSocket not bound for subscription: {sub.get('subscriber')}")
             else:
                 # WebSub delivery - HTTP POST to callback (can be async but using sync for now)
                 callback = sub.get("callback")
@@ -834,7 +972,7 @@ async def post_hub_topic(topic: str, request: Request):
                         import asyncio
                         loop = asyncio.get_event_loop()
                         await loop.run_in_executor(None, lambda: urllib.request.urlopen(req, timeout=5))
-                        print(f"[LOG] Sent WebSub notification to {callback}")
+                        cast_hub.log(f"Sent WebSub notification to {callback}")
                         # Log sent message
                         cast_hub.add_audit_log(
                             user=sub.get("subscriber", "unknown"),
@@ -844,9 +982,9 @@ async def post_hub_topic(topic: str, request: Request):
                             direction="sent"
                         )
                     except Exception as e:
-                        print(f"[LOG] WebSub delivery error to {callback}: {e}")
+                        cast_hub.log(f"WebSub delivery error to {callback}: {e}")
         
-        # Handle conferences - broadcast to attendees
+        # Handle conferences - broadcast to attendees (skip if already sent)
         for conference in cast_hub.conferences:
             if conference.get("user") == topic_name:
                 for attendee_topic in conference.get("topics", []):
@@ -855,10 +993,15 @@ async def post_hub_topic(topic: str, request: Request):
                         if sub.get("topic") == attendee_topic and sub.get("channel") == "websocket":
                             endpoint = sub.get("websocket_endpoint")
                             if endpoint and endpoint in cast_hub.websocket_connections:
+                                # Skip if already sent to this endpoint
+                                if endpoint in sent_endpoints:
+                                    continue
                                 try:
                                     websocket = cast_hub.websocket_connections[endpoint]
                                     await websocket.send_text(notification_json)
-                                    print(f"[LOG] Sent conference message to attendee: {attendee_topic}")
+                                    cast_hub.log(f"Sent conference message to attendee: {attendee_topic}")
+                                    # Track this endpoint as having received the message
+                                    sent_endpoints.add(endpoint)
                                     # Log sent conference message
                                     cast_hub.add_audit_log(
                                         user=sub.get("subscriber", "unknown"),
@@ -868,11 +1011,11 @@ async def post_hub_topic(topic: str, request: Request):
                                         direction="sent"
                                     )
                                 except Exception as e:
-                                    print(f"[LOG] Conference WebSocket error: {e}")
+                                    cast_hub.log(f"Conference WebSocket error: {e}")
         
         return {"status": "received"}
     except Exception as e:
-        print(f"[LOG] Error handling event: {e}")
+        cast_hub.log(f"Error handling event: {e}")
         raise HTTPException(status_code=400, detail=str(e))
     finally:
         # Send admin refresh command (rate limited)
@@ -927,7 +1070,7 @@ async def delete_hub(request: Request):
     
     # Otherwise, clear all subscriptions
     cast_hub.subscriptions.clear()
-    print("[LOG] All subscriptions cleared")
+    cast_hub.log("All subscriptions cleared")
     return {"status": "cleared"}
 
 
@@ -952,6 +1095,9 @@ async def websocket_endpoint(websocket: WebSocket, endpoint: str):
     except Exception as e:
         cast_hub.log(f"Error sending connection confirmation: {e}")
     
+    # Send admin refresh on connection
+    await cast_hub.send_admin_refresh_command()
+    
     # Keepalive task to prevent Azure from closing idle connections
     async def keepalive():
         while True:
@@ -962,7 +1108,7 @@ async def websocket_endpoint(websocket: WebSocket, endpoint: str):
                     "timestamp": datetime.now().isoformat()
                 })
             except Exception as e:
-                print(f"[LOG] Keepalive error for {endpoint}: {e}")
+                cast_hub.log(f"Keepalive error for {endpoint}: {e}")
                 break
     
     keepalive_task = asyncio.create_task(keepalive())
@@ -973,17 +1119,19 @@ async def websocket_endpoint(websocket: WebSocket, endpoint: str):
             data = await websocket.receive_text()
             try:
                 message = json.loads(data)
-                print(f"[LOG] Received WebSocket message from {endpoint}: {message}")
+                cast_hub.log(f"Received WebSocket message from {endpoint}: {message}")
                 
                 # Respond to pong messages
                 if message.get("type") == "pong":
                     cast_hub.log(f"Received pong from {endpoint}")
             except json.JSONDecodeError:
-                print(f"[LOG] Received non-JSON WebSocket message from {endpoint}: {data}")
+                cast_hub.log(f"Received non-JSON WebSocket message from {endpoint}: {data}")
     except WebSocketDisconnect:
         cast_hub.log(f"WebSocket disconnected for endpoint: {endpoint}")
     except Exception as e:
         cast_hub.log(f"WebSocket error for endpoint {endpoint}: {type(e).__name__}: {e}")
+        # Send admin refresh on error
+        await cast_hub.send_admin_refresh_command()
     finally:
         # Cancel keepalive task
         keepalive_task.cancel()
@@ -995,6 +1143,9 @@ async def websocket_endpoint(websocket: WebSocket, endpoint: str):
         # Unregister WebSocket connection
         cast_hub.unregister_websocket(endpoint)
         cast_hub.log(f"WebSocket cleanup completed for endpoint: {endpoint}")
+        
+        # Send admin refresh on disconnect
+        await cast_hub.send_admin_refresh_command()
 
 
 @app.websocket("/ws/admin")
@@ -1003,10 +1154,22 @@ async def admin_websocket_endpoint(websocket: WebSocket):
     import asyncio
     
     await websocket.accept()
-    cast_hub.log("Admin WebSocket connection accepted")
     
-    # Register admin WebSocket
-    cast_hub.register_admin_websocket(websocket)
+    # Extract location information from request headers
+    location = "unknown"
+    try:
+        # Try to get client IP and other location info
+        client_host = websocket.client.host if websocket.client else "unknown"
+        client_port = websocket.client.port if websocket.client else "unknown"
+        location = f"{client_host}:{client_port}"
+    except Exception as e:
+        cast_hub.log(f"Could not extract location info: {e}")
+        location = "unknown"
+    
+    cast_hub.log(f"Admin WebSocket connection accepted from {location}")
+    
+    # Register admin WebSocket with location
+    cast_hub.register_admin_websocket(websocket, location)
     
     # Send initial connection confirmation
     try:
@@ -1039,6 +1202,107 @@ async def admin_websocket_endpoint(websocket: WebSocket):
         # Unregister admin WebSocket
         cast_hub.unregister_admin_websocket(websocket)
         cast_hub.log("Admin WebSocket cleanup completed")
+
+
+@app.websocket("/ws/logs")
+async def logs_websocket_endpoint(websocket: WebSocket):
+    """WebSocket endpoint for log viewer - streams application logs"""
+    import asyncio
+    
+    await websocket.accept()
+    
+    # Extract location information from request
+    location = "unknown"
+    try:
+        client_host = websocket.client.host if websocket.client else "unknown"
+        client_port = websocket.client.port if websocket.client else "unknown"
+        location = f"{client_host}:{client_port}"
+    except Exception as e:
+        cast_hub.log(f"Could not extract location info: {e}")
+        location = "unknown"
+    
+    cast_hub.log(f"Log viewer WebSocket connection accepted from {location}")
+    
+    # Register log WebSocket with location
+    cast_hub.register_log_websocket(websocket, location)
+    
+    # Send initial connection confirmation and all recent logs
+    try:
+        await websocket.send_json({
+            "type": "connection.established",
+            "role": "log_viewer",
+            "timestamp": datetime.now().isoformat()
+        })
+        
+        # Send all recent logs
+        recent_logs = cast_hub.get_logs(100)  # Send last 100 logs
+        for log_entry in recent_logs:
+            await websocket.send_json({
+                "type": "log",
+                "message": log_entry,
+                "timestamp": datetime.now().isoformat()
+            })
+    except Exception as e:
+        cast_hub.log(f"Error sending initial logs: {e}")
+    
+    # Background task to broadcast new logs
+    last_queue_size = [len(cast_hub.log_queue)]  # Use list to allow modification in nested function
+    
+    async def broadcast_new_logs():
+        """Background task to check for new logs and broadcast them"""
+        while True:
+            try:
+                await asyncio.sleep(0.1)  # Check every 100ms
+                current_queue_size = len(cast_hub.log_queue)
+                
+                # If queue has grown, send new logs
+                if current_queue_size > last_queue_size[0]:
+                    new_logs = cast_hub.log_queue[last_queue_size[0]:]
+                    for log_entry in new_logs:
+                        try:
+                            await websocket.send_json({
+                                "type": "log",
+                                "message": log_entry,
+                                "timestamp": datetime.now().isoformat()
+                            })
+                        except Exception as e:
+                            cast_hub.log(f"Error sending log entry: {e}")
+                            break  # Connection likely closed
+                    last_queue_size[0] = current_queue_size
+            except Exception as e:
+                cast_hub.log(f"Error in broadcast_new_logs: {e}")
+                break
+    
+    broadcast_task = asyncio.create_task(broadcast_new_logs())
+    
+    try:
+        while True:
+            # Receive messages from log viewer client (pong, etc.)
+            data = await websocket.receive_text()
+            try:
+                message = json.loads(data)
+                cast_hub.log(f"Received log viewer WebSocket message: {message}")
+                
+                # Respond to pong messages
+                if message.get("type") == "pong":
+                    cast_hub.log("Received pong from log viewer client")
+            except json.JSONDecodeError:
+                cast_hub.log(f"Received non-JSON log viewer message: {data}")
+    except WebSocketDisconnect:
+        cast_hub.log("Log viewer WebSocket disconnected")
+    except Exception as e:
+        cast_hub.log(f"Log viewer WebSocket error: {type(e).__name__}: {e}")
+    finally:
+        # Cancel broadcast task
+        broadcast_task.cancel()
+        try:
+            await broadcast_task
+        except asyncio.CancelledError:
+            pass
+        
+        # Unregister log WebSocket
+        cast_hub.unregister_log_websocket(websocket)
+        cast_hub.log("Log viewer WebSocket cleanup completed")
 
 
 @app.post("/api/admin/refresh")
@@ -1089,32 +1353,44 @@ async def post_oauth_token(request: Request):
     query_params = dict(request.query_params)
     request_data.update(query_params)
     
-    # Check if client_product_Name is provided
-    client_product_name = request_data.get("client_product_name")
+    # Check if topic is provided - if so, use it directly without incrementing count
+    provided_topic = request_data.get("topic")
     
-    if client_product_name:
-        # Increment count for this client_product_Name
-        if client_product_name not in cast_hub.product_counts:
-            cast_hub.product_counts[client_product_name] = 0
-        cast_hub.product_counts[client_product_name] += 1
-        topic = f"{client_product_name}-{cast_hub.product_counts[client_product_name]}"
-        count = cast_hub.product_counts[client_product_name]
+    if provided_topic:
+        # Use the provided topic without incrementing user_count
+        topic = provided_topic
+        user_name = provided_topic
+        subscriber_name = provided_topic
+        count = 0  # Not used when topic is provided, but set for response consistency
+        
+        # Check if client_product_name is provided for subscriber_name
+        client_product_name = request_data.get("client_product_name")
+        if client_product_name:
+            subscriber_name = client_product_name + "-" + user_name
     else:
+        # Original logic: generate topic and increment count
+        # Check if client_product_Name is provided
+        client_product_name = request_data.get("client_product_name")
+        
         # Use default user-{count} format
         cast_hub.user_count += 1
-        topic = f"user-{cast_hub.user_count}"
         count = cast_hub.user_count
 
-    user_name=topic
+        user_name = f"USER-{cast_hub.user_count}"
+        topic = user_name
+        subscriber_name = user_name
+        if client_product_name:
+            subscriber_name = client_product_name + "-" + user_name
+    
     response = {
         "token_type": "Bearer",
         "expires_in": 3600,
         "scope": "openid",
-        # "topic": topic,
-        "topic": "CAST-USER-1",
+        "topic": topic,
         "id_token": f"mock_id_token_{count}",
         "access_token": f"mock_access_token_{count}",
-        "user_name": user_name
+        "user_name": user_name,
+        "subscriber_name": subscriber_name
     }
     return response
 
@@ -1170,8 +1446,6 @@ def main():
     print(f"  DELETE http://{args.host}:{args.port}/conference")
     print(f"  POST   http://{args.host}:{args.port}/status")
     print(f"  POST   http://{args.host}:{args.port}/oauth/token")
-    print(f"  GET    http://{args.host}:{args.port}/api/powercast-connector/configuration")
-    print(f"  GET    http://{args.host}:{args.port}/api/powercast-connector/login")
     print("")
     print(f"WebSocket connections: ws://{args.host}:{args.port}/bind/<endpoint>")
     print("")

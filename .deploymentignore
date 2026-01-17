@@ -1,0 +1,45 @@
+# Azure Deployment - Ignore List
+# Files and directories that should not be deployed to save space and bandwidth
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.Python
+env/
+venv/
+antenv/
+*.egg
+dist/
+build/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# IDE and Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.code-workspace
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Development
+node_modules/
+.npm
+.eslintcache
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+*.backup
+
+viewer/

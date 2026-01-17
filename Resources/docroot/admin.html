@@ -274,8 +274,11 @@
             <img src="/images/3DSlicer-DesktopIcon.png" alt="3D Slicer" onerror="this.style.display='none'">
             3D Slicer Web Server Cast API
             <div class="header-actions">
-                <button onclick="window.open('/test-client', '_blank')" style="background-color: #90A4AE; color: white; border: 1px solid #78909C;">
+                <button onclick="window.open('/api/hub/test-client', '_blank')" style="background-color: #90A4AE; color: white; border: 1px solid #78909C;">
                     Open test client
+                </button>
+                <button onclick="window.open('/api/hub/logs', '_blank')" style="background-color: #90A4AE; color: white; border: 1px solid #78909C;">
+                    View Logs
                 </button>
                 <button id="resetButton" onclick="resetHub()" style="opacity: 0; width: 1px; height: 1px; padding: 0; margin: 0; border: none; overflow: hidden; cursor: pointer;" title="Reset Hub">Reset</button>
             </div>
@@ -290,15 +293,15 @@
 
         <div class="stats">
             <div class="stat-card">
-                <h3>Active Subscriptions</h3>
+                <h3>Subscriptions</h3>
                 <div class="value" id="totalSubscriptions">-</div>
             </div>
             <div class="stat-card">
-                <h3>Active WebSockets</h3>
+                <h3>WebSockets</h3>
                 <div class="value" id="totalWebsockets">-</div>
             </div>
             <div class="stat-card">
-                <h3>Active Conferences</h3>
+                <h3>Conferences</h3>
                 <div class="value" id="totalConferences">-</div>
             </div>
             <div class="stat-card">
@@ -307,15 +310,15 @@
             </div>
         </div>
 
-        <h2>Active Subscriptions</h2>
+        <h2>Subscriptions</h2>
         <div id="subscriptionsTable"></div>
 
-        <h2>Active Conferences</h2>
+        <h2>Conferences</h2>
         <div id="conferencesTable"></div>
 
         <div class="audit-log">
             <h2>
-                Audit Log
+                Message Log
             </h2>
             <div class="filters">
                 <select id="userFilter">
@@ -327,7 +330,7 @@
                 <button onclick="loadAuditLog()">Filter</button>
             </div>
             <div id="auditLogTable">
-                <p>Loading audit log...</p>
+                <p>Loading message log...</p>
             </div>
         </div>
 
@@ -354,6 +357,9 @@
                 document.getElementById('totalWebsockets').textContent = data.total_websockets || 0;
                 document.getElementById('totalMessages').textContent = data.total_messages || 0;
                 
+                // Update connection status with admin client count
+                updateConnectionStatus(data.total_admin_clients);
+                
                 const tableDiv = document.getElementById('subscriptionsTable');
                 if (data.subscriptions && data.subscriptions.length > 0) {
                     let tableHTML = '<table><thead><tr><th>Subscriber</th><th>Topic</th><th>Channel</th><th>Endpoint</th><th>Events</th><th>Created</th></tr></thead><tbody>';
@@ -375,7 +381,7 @@
                     tableHTML += '</tbody></table>';
                     tableDiv.innerHTML = tableHTML;
                 } else {
-                    tableDiv.innerHTML = '<div class="no-subscriptions">No active subscriptions</div>';
+                    tableDiv.innerHTML = '<div class="no-subscriptions">No subscriptions</div>';
                 }
                 
                 // Load conferences
@@ -423,7 +429,7 @@
                     if (totalConferencesElement) {
                         totalConferencesElement.textContent = '0';
                     }
-                    tableDiv.innerHTML = '<div class="no-subscriptions">No active conferences</div>';
+                    tableDiv.innerHTML = '<div class="no-subscriptions">No conferences</div>';
                 }
             } catch (error) {
                 console.error('Error loading conferences:', error);
@@ -445,8 +451,8 @@
                 updateDropdowns(data.unique_users || [], data.unique_topics || []);
                 displayAuditLog(data.entries || []);
             } catch (error) {
-                console.error('Error loading audit log:', error);
-                document.getElementById('auditLogTable').innerHTML = '<p class="error">Error loading audit log</p>';
+                console.error('Error loading message log:', error);
+                document.getElementById('auditLogTable').innerHTML = '<p class="error">Error loading message log</p>';
             }
         }
         
@@ -480,19 +486,19 @@
         }
         
         async function clearAuditLog() {
-            if (!confirm('Are you sure you want to clear the audit log?')) return;
+            if (!confirm('Are you sure you want to clear the message log?')) return;
             
             try {
                 await fetch('/api/audit-log', { method: 'DELETE' });
                 loadAuditLog();
             } catch (error) {
-                console.error('Error clearing audit log:', error);
-                alert('Error clearing audit log');
+                console.error('Error clearing message log:', error);
+                alert('Error clearing message log');
             }
         }
         
         async function resetHub() {
-            if (!confirm('Are you sure you want to reset the hub? This will delete all subscriptions, conferences, and audit log entries. This action cannot be undone.')) {
+            if (!confirm('Are you sure you want to reset the hub? This will delete all subscriptions, conferences, and message log entries. This action cannot be undone.')) {
                 return;
             }
             
@@ -534,7 +540,7 @@
             const tableDiv = document.getElementById('auditLogTable');
             
             if (entries.length === 0) {
-                tableDiv.innerHTML = '<div class="no-subscriptions">No audit log entries found</div>';
+                tableDiv.innerHTML = '<div class="no-subscriptions">No message log entries found</div>';
                 return;
             }
             
@@ -582,6 +588,39 @@
             loadAuditLog();
         }
         
+        async function updateConnectionStatus(adminClientCount) {
+            const statusEl = document.getElementById('connectionStatus');
+            if (!statusEl) return;
+            
+            // If count not provided, fetch it
+            if (adminClientCount === undefined) {
+                try {
+                    const response = await fetch('/api/hub/status');
+                    if (response.ok) {
+                        const data = await response.json();
+                        adminClientCount = data.total_admin_clients || 0;
+                    }
+                } catch (e) {
+                    console.error('Error fetching admin client count:', e);
+                }
+            }
+            
+            if (adminWebSocket && adminWebSocket.readyState === WebSocket.OPEN) {
+                if (adminClientCount !== undefined && adminClientCount > 0) {
+                    statusEl.textContent = `Connected (${adminClientCount} admin client${adminClientCount !== 1 ? 's' : ''})`;
+                } else {
+                    statusEl.textContent = 'Connected';
+                }
+                statusEl.style.color = '#90A4AE';
+            } else if (adminWebSocket && adminWebSocket.readyState === WebSocket.CONNECTING) {
+                statusEl.textContent = 'Connecting...';
+                statusEl.style.color = '#b0b0b0';
+            } else {
+                statusEl.textContent = 'Disconnected';
+                statusEl.style.color = '#999';
+            }
+        }
+        
         // Admin WebSocket connection
         let adminWebSocket = null;
         let reconnectAttempts = 0;
@@ -597,11 +636,8 @@
                 adminWebSocket.onopen = function(event) {
                     console.log('Admin WebSocket connected');
                     reconnectAttempts = 0;
-                    const statusEl = document.getElementById('connectionStatus');
-                    if (statusEl) {
-                        statusEl.textContent = 'Connected';
-                        statusEl.style.color = '#90A4AE';
-                    }
+                    // Update status after getting admin client count
+                    updateConnectionStatus();
                 };
                 
                 adminWebSocket.onmessage = function(event) {
@@ -614,11 +650,7 @@
                             refreshAll();
                         } else if (message.type === 'connection.established') {
                             console.log('Admin connection established');
-                            const statusEl = document.getElementById('connectionStatus');
-                            if (statusEl) {
-                                statusEl.textContent = 'Connected';
-                                statusEl.style.color = '#90A4AE';
-                            }
+                            updateConnectionStatus();
                         } else if (message.type === 'ping') {
                             // Respond to ping with pong
                             adminWebSocket.send(JSON.stringify({ type: 'pong' }));
@@ -630,20 +662,12 @@
                 
                 adminWebSocket.onerror = function(error) {
                     console.error('Admin WebSocket error:', error);
-                    const statusEl = document.getElementById('connectionStatus');
-                    if (statusEl) {
-                        statusEl.textContent = 'Connection error';
-                        statusEl.style.color = '#d32f2f';
-                    }
+                    updateConnectionStatus();
                 };
                 
                 adminWebSocket.onclose = function(event) {
                     console.log('Admin WebSocket closed');
-                    const statusEl = document.getElementById('connectionStatus');
-                    if (statusEl) {
-                        statusEl.textContent = 'Disconnected';
-                        statusEl.style.color = '#999';
-                    }
+                    updateConnectionStatus();
                     
                     // Attempt to reconnect
                     if (reconnectAttempts < maxReconnectAttempts) {
@@ -652,20 +676,12 @@
                         setTimeout(connectAdminWebSocket, 2000 * reconnectAttempts);
                     } else {
                         console.error('Max reconnection attempts reached');
-                        const statusEl = document.getElementById('connectionStatus');
-                        if (statusEl) {
-                            statusEl.textContent = 'Connection failed';
-                            statusEl.style.color = '#d32f2f';
-                        }
+                        updateConnectionStatus();
                     }
                 };
             } catch (e) {
                 console.error('Error creating admin WebSocket:', e);
-                const statusEl = document.getElementById('connectionStatus');
-                if (statusEl) {
-                    statusEl.textContent = 'Connection failed';
-                    statusEl.style.color = '#d32f2f';
-                }
+                updateConnectionStatus();
             }
         }
 

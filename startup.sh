@@ -7,7 +7,7 @@ if [ -d "antenv" ]; then
 fi
 
 # Start the application with gunicorn
-exec gunicorn -w 4 -k uvicorn.workers.UvicornWorker app:app \
+exec gunicorn -w 1 -k uvicorn.workers.UvicornWorker app:app \
     --bind=0.0.0.0:8000 \
     --timeout 600 \
     --access-logfile - \
