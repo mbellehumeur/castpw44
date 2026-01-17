@@ -415,30 +415,37 @@ class CastHub:
         if len(self.audit_log) > 1000:
             self.audit_log = self.audit_log[-1000:]
     
-    def get_audit_log(self, user_filter: Optional[str] = None, topic_filter: Optional[str] = None) -> List[Dict]:
-        """Get audit log entries, optionally filtered by user or topic"""
+    def get_audit_log(self, user_filter: Optional[str] = None, topic_filter: Optional[str] = None, event_filter: Optional[str] = None) -> List[Dict]:
+        """Get audit log entries, optionally filtered by user, topic, or event"""
         filtered_log = self.audit_log
         if user_filter:
             filtered_log = [entry for entry in filtered_log if user_filter.lower() in entry.get("user", "").lower()]
         if topic_filter:
             filtered_log = [entry for entry in filtered_log if topic_filter.lower() in entry.get("topic", "").lower()]
+        if event_filter:
+            filtered_log = [entry for entry in filtered_log if event_filter.lower() in entry.get("event_name", "").lower()]
         # Return in reverse order (latest first)
         return list(reversed(filtered_log))
     
     def get_audit_log_unique_values(self) -> Dict[str, List[str]]:
-        """Get unique users and topics from audit log"""
+        """Get unique users, topics, and events from audit log"""
         users = set()
         topics = set()
+        events = set()
         for entry in self.audit_log:
             user = entry.get("user")
             topic = entry.get("topic")
+            event_name = entry.get("event_name")
             if user and str(user).strip():  # Check for non-empty string
                 users.add(str(user).strip())
             if topic and str(topic).strip():  # Check for non-empty string
                 topics.add(str(topic).strip())
+            if event_name and str(event_name).strip():  # Check for non-empty string
+                events.add(str(event_name).strip())
         return {
             "users": sorted(list(users)),
-            "topics": sorted(list(topics))
+            "topics": sorted(list(topics)),
+            "events": sorted(list(events))
         }
     
     def clear_audit_log(self):
@@ -731,15 +738,16 @@ async def get_hub_status_json():
 
 
 @app.get("/api/audit-log")
-async def get_audit_log(user: Optional[str] = None, topic: Optional[str] = None):
-    """Get audit log entries with optional filtering by user or topic"""
-    log_entries = cast_hub.get_audit_log(user_filter=user, topic_filter=topic)
+async def get_audit_log(user: Optional[str] = None, topic: Optional[str] = None, event: Optional[str] = None):
+    """Get audit log entries with optional filtering by user, topic, or event"""
+    log_entries = cast_hub.get_audit_log(user_filter=user, topic_filter=topic, event_filter=event)
     unique_values = cast_hub.get_audit_log_unique_values()
     return {
         "entries": log_entries,
         "count": len(log_entries),
         "unique_users": unique_values["users"],
-        "unique_topics": unique_values["topics"]
+        "unique_topics": unique_values["topics"],
+        "unique_events": unique_values["events"]
     }
 
 
