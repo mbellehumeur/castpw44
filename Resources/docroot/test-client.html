@@ -209,7 +209,7 @@
                 3D Slicer Cast Test Client
             </span>
             <span style="font-weight: normal; color: #90A4AE; font-size: 24px;">
-                ID: <span id="subscriberNameDisplay"></span>
+                ID: <span id="topicDisplay"></span>
             </span>
         </h1>
         
@@ -385,12 +385,12 @@
                     topicFromToken = tokenData.topic;
                     subscriberName ='TEST-CLIENT-' + tokenData.topic ;
 
-                    // Update UI
-                    document.getElementById('subscriberNameDisplay').textContent = subscriberName;
-                    document.getElementById('subscriberName').value = subscriberName;
-                    
                     // Use topic from URL if provided, otherwise use topic from token
                     const topicToUse = topicFromUrl || topicFromToken;
+                    
+                    // Update UI
+                    document.getElementById('topicDisplay').textContent = topicToUse;
+                    document.getElementById('subscriberName').value = subscriberName;
                     
                     document.getElementById('topic').value = topicToUse;
                     document.getElementById('publishTopic').value = topicToUse;
