@@ -780,6 +780,7 @@ async def get_hub_status_json():
         "total_topics": len(set(sub.get("topic") for sub in subscriptions if sub.get("topic"))),
         "total_messages": len(cast_hub.audit_log),
         "total_admin_clients": len(cast_hub.admin_websockets),
+        "single_user_mode": cast_hub.single_user_mode,
         "subscriptions": subscriptions,
         "websocket_endpoints": list(cast_hub.websocket_connections.keys()),
         "topics": list(set(sub.get("topic") for sub in subscriptions if sub.get("topic")))

@@ -44,6 +44,18 @@
             background-color: #78909C !important;
             border-color: #90A4AE !important;
         }
+        .single-user-badge {
+            background-color: #d32f2f;
+            color: #fff;
+            border: 1px solid #c62828;
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .header-actions .single-user-badge {
+            margin-right: 8px;
+        }
         h2 button {
             background-color: #90A4AE;
             color: white;
@@ -280,6 +292,7 @@
             <img src="/images/3DSlicer-DesktopIcon.png" alt="3D Slicer" onerror="this.style.display='none'">
             3D Slicer Web Server Cast API
             <div class="header-actions">
+                <span id="singleUserBadge" class="single-user-badge" style="display:none;" title="Token endpoint returns SINGLE-USER in this mode">Single-user mode</span>
                 <button onclick="window.open('/api/hub/logs', '_blank')" style="background-color: #90A4AE; color: white; border: 1px solid #78909C;">
                     Server logs
                 </button>
@@ -362,6 +375,12 @@
                 document.getElementById('totalSubscriptions').textContent = data.total_subscriptions || 0;
                 document.getElementById('totalWebsockets').textContent = data.total_websockets || 0;
                 document.getElementById('totalMessages').textContent = data.total_messages || 0;
+
+                // Toggle single-user mode badge
+                const badge = document.getElementById('singleUserBadge');
+                if (badge) {
+                    badge.style.display = data.single_user_mode ? 'inline-block' : 'none';
+                }
                 
                 // Update connection status with admin client count
                 updateConnectionStatus(data.total_admin_clients);
