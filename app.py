@@ -32,6 +32,7 @@ try:
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import JSONResponse
     from fastapi.staticfiles import StaticFiles
+    from starlette.middleware.base import BaseHTTPMiddleware
     import uvicorn
     HAS_FASTAPI = True
 except ImportError:
@@ -51,6 +52,50 @@ app.add_middleware(
     expose_headers=["*"],
     max_age=3600,
 )
+
+
+class RequestLoggingMiddleware(BaseHTTPMiddleware):
+    """Middleware to log HTTP requests for specific endpoints"""
+    
+    async def dispatch(self, request: Request, call_next):
+        # Check if this is an endpoint we want to log
+        path = request.url.path
+        method = request.method
+        
+        # Exclude certain endpoints from logging
+        excluded_paths = ["/api/hub/status", "/api/hub/admin", "/api/hub/admin/", "/api/hub/logs", "/api/hub/logs/"]
+        
+        should_log = False
+        if path.startswith("/api/hub") and method in ["GET", "POST", "DELETE"]:
+            # Check if this path should be excluded
+            if path not in excluded_paths:
+                should_log = True
+        elif path == "/oauth/token" and method == "POST":
+            should_log = True
+        elif path == "/conference" and method in ["GET", "POST", "DELETE"]:
+            should_log = True
+        
+        if should_log:
+            # Get client info
+            client_host = request.client.host if request.client else "unknown"
+            client_port = request.client.port if request.client else "unknown"
+            client_addr = f"{client_host}:{client_port}"
+            
+            # Process request
+            start_time = datetime.now()
+            response = await call_next(request)
+            process_time = (datetime.now() - start_time).total_seconds()
+            
+            # Log the request
+            status_code = response.status_code
+            log_message = f'INFO:     {client_addr} - "{method} {path} HTTP/1.1" {status_code}'
+            cast_hub.log(log_message)
+            
+            return response
+        else:
+            # Don't log, just process normally
+            return await call_next(request)
+
 
 # Mount static files directory
 base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -80,6 +125,7 @@ class CastHub:
         self.max_logs = 100  # Keep last 100 log entries
         self.last_admin_refresh_time: float = 0.0  # Track last admin refresh time for rate limiting
         self.pending_admin_refresh_task = None  # Track pending refresh task (to cancel if needed)
+        self.single_user_mode: bool = False  # When enabled, token endpoint always returns topic 'SINGLE-USER'
     
     def log(self, message: str):
         """Add a log message to the in-memory log buffer"""
@@ -500,6 +546,9 @@ class CastHub:
 
 # Global Cast Hub instance
 cast_hub = CastHub()
+
+# Add the request logging middleware (after cast_hub is created)
+app.add_middleware(RequestLoggingMiddleware)
 
 
 @app.get("/topics")
@@ -1330,13 +1379,30 @@ async def trigger_admin_refresh():
 
 
 @app.post("/api/admin/reset")
-async def reset_hub():
+async def reset_hub(request: Request):
     """Reset the hub - clear all subscriptions, conferences, and audit log (like restarting the service)"""
+    # Parse request body for single_user_mode
+    single_user_mode = False
+    try:
+        content_type = request.headers.get("content-type", "")
+        if "application/json" in content_type:
+            data = await request.json()
+            single_user_mode = data.get("single_user_mode", False)
+        else:
+            form_data = await request.form()
+            single_user_mode = form_data.get("single_user_mode", "false").lower() == "true"
+    except:
+        pass  # Default to False if parsing fails
+    
+    # Set single-user mode
+    cast_hub.single_user_mode = single_user_mode
+    
     await cast_hub.reset_all()
     
     # Note: No need to send refresh command since all admin websockets were just closed
     
-    return {"status": "reset", "message": "All subscriptions, conferences, audit log cleared, and all WebSocket connections disconnected"}
+    mode_msg = " (Single-user mode enabled)" if single_user_mode else ""
+    return {"status": "reset", "message": f"All subscriptions, conferences, audit log cleared, and all WebSocket connections disconnected{mode_msg}"}
 
 
 @app.post("/oauth/token")
@@ -1370,10 +1436,21 @@ async def post_oauth_token(request: Request):
     query_params = dict(request.query_params)
     request_data.update(query_params)
     
+    # Check if single-user mode is enabled
+    if cast_hub.single_user_mode:
+        # Always return SINGLE-USER topic in single-user mode
+        topic = "SINGLE-USER"
+        user_name = "SINGLE-USER"
+        subscriber_name = "SINGLE-USER"
+        count = 0
+        
+        # Check if client_product_name is provided for subscriber_name
+        client_product_name = request_data.get("client_product_name")
+        if client_product_name:
+            subscriber_name = client_product_name + "-" + user_name
     # Check if topic is provided - if so, use it directly without incrementing count
-    provided_topic = request_data.get("topic")
-    
-    if provided_topic:
+    elif request_data.get("topic"):
+        provided_topic = request_data.get("topic")
         # Use the provided topic without incrementing user_count
         topic = provided_topic
         user_name = provided_topic

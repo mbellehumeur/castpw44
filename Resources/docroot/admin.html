@@ -519,42 +519,91 @@
         }
         
         async function resetHub() {
-            if (!confirm('Are you sure you want to reset the hub? This will delete all subscriptions, conferences, and message log entries. This action cannot be undone.')) {
-                return;
-            }
+            // Create backdrop overlay
+            const backdrop = document.createElement('div');
+            backdrop.style.cssText = 'position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 9999;';
             
-            const resetBtn = document.getElementById('serverResetBtn');
-            const statusDiv = document.getElementById('serverResetStatus');
-            resetBtn.disabled = true;
-            resetBtn.textContent = 'Resetting...';
-            statusDiv.innerHTML = '';
+            // Create custom dialog with checkbox
+            const dialog = document.createElement('div');
+            dialog.style.cssText = 'position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: #3d3d3d; padding: 30px; border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.5); z-index: 10000; min-width: 400px;';
+            dialog.innerHTML = `
+                <h3 style="margin-top: 0; color: #e0e0e0;">Reset Server</h3>
+                <p style="color: #e0e0e0; margin-bottom: 20px;">Are you sure you want to reset the hub? This will delete all subscriptions, conferences, and message log entries. This action cannot be undone.</p>
+                <label style="display: flex; align-items: center; gap: 10px; color: #e0e0e0; margin-bottom: 20px; cursor: pointer;">
+                    <input type="checkbox" id="singleUserModeCheckbox" style="width: 18px; height: 18px; cursor: pointer;">
+                    <span>Single-user mode</span>
+                </label>
+                <div style="display: flex; gap: 10px; justify-content: flex-end;">
+                    <button id="cancelResetBtn" style="padding: 8px 16px; background-color: #4a4a4a; color: #e0e0e0; border: 1px solid #666; border-radius: 4px; cursor: pointer;">Cancel</button>
+                    <button id="confirmResetBtn" style="padding: 8px 16px; background-color: #d32f2f; color: white; border: 1px solid #c62828; border-radius: 4px; cursor: pointer;">Reset</button>
+                </div>
+            `;
+            document.body.appendChild(backdrop);
+            document.body.appendChild(dialog);
             
-            try {
-                const response = await fetch('/api/admin/reset', { method: 'POST' });
-                if (response.ok) {
-                    const data = await response.json();
-                    statusDiv.innerHTML = `<div style="background-color: #2e7d32; color: #a5d6a7; padding: 12px; border-radius: 4px; border-left: 3px solid #4CAF50;">${escapeHtml(data.message || 'Server reset successfully')}</div>`;
-                    // Refresh all data
-                    await refreshAll();
-                    // Auto-hide after 2 seconds
-                    setTimeout(() => {
-                        statusDiv.innerHTML = '';
-                    }, 2000);
-                } else {
-                    const errorText = await response.text();
-                    throw new Error(`Reset failed: ${response.status} - ${errorText}`);
-                }
-            } catch (error) {
-                console.error('Error resetting hub:', error);
-                statusDiv.innerHTML = `<div class="error">Error resetting hub: ${escapeHtml(error.message)}</div>`;
-                // Auto-hide after 2 seconds
-                setTimeout(() => {
+            return new Promise((resolve) => {
+                const closeDialog = () => {
+                    document.body.removeChild(backdrop);
+                    document.body.removeChild(dialog);
+                };
+                
+                backdrop.onclick = () => {
+                    closeDialog();
+                    resolve(false);
+                };
+                
+                document.getElementById('cancelResetBtn').onclick = () => {
+                    closeDialog();
+                    resolve(false);
+                };
+                
+                document.getElementById('confirmResetBtn').onclick = async () => {
+                    const singleUserMode = document.getElementById('singleUserModeCheckbox').checked;
+                    closeDialog();
+                    
+                    const resetBtn = document.getElementById('serverResetBtn');
+                    const statusDiv = document.getElementById('serverResetStatus');
+                    resetBtn.disabled = true;
+                    resetBtn.textContent = 'Resetting...';
                     statusDiv.innerHTML = '';
-                }, 2000);
-            } finally {
-                resetBtn.disabled = false;
-                resetBtn.textContent = 'Reset Server';
-            }
+                    
+                    try {
+                        const response = await fetch('/api/admin/reset', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({ single_user_mode: singleUserMode })
+                        });
+                        
+                        if (response.ok) {
+                            const data = await response.json();
+                            statusDiv.innerHTML = `<div style="background-color: #2e7d32; color: #a5d6a7; padding: 12px; border-radius: 4px; border-left: 3px solid #4CAF50;">${escapeHtml(data.message || 'Server reset successfully')}</div>`;
+                            // Refresh all data
+                            await refreshAll();
+                            // Auto-hide after 2 seconds
+                            setTimeout(() => {
+                                statusDiv.innerHTML = '';
+                            }, 2000);
+                        } else {
+                            const errorText = await response.text();
+                            throw new Error(`Reset failed: ${response.status} - ${errorText}`);
+                        }
+                    } catch (error) {
+                        console.error('Error resetting hub:', error);
+                        statusDiv.innerHTML = `<div class="error">Error resetting hub: ${escapeHtml(error.message)}</div>`;
+                        // Auto-hide after 2 seconds
+                        setTimeout(() => {
+                            statusDiv.innerHTML = '';
+                        }, 2000);
+                    } finally {
+                        resetBtn.disabled = false;
+                        resetBtn.textContent = 'Reset Server';
+                    }
+                    
+                    resolve(true);
+                };
+            });
         }
         
         function displayAuditLog(entries) {
