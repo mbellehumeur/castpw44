@@ -314,6 +314,41 @@
         </div>
 
         <div class="section">
+            <h2>Get</h2>
+            <div id="getContent">
+                <div class="form-group" style="display: flex; gap: 15px; align-items: flex-end;">
+                    <div style="flex: 1;">
+                        <label for="getSubscriber">Subscriber:</label>
+                        <input type="text" id="getSubscriber" placeholder="Enter subscriber name">
+                    </div>
+                    <div style="flex: 1;">
+                        <label for="getDataType">DataType:</label>
+                        <select id="getDataType">
+                            <option value="">Select data type</option>
+                            <option value="SCENEVIEW" selected>SCENEVIEW</option>
+                            <option value="TRANSFORM">TRANSFORM</option>
+                            <option value="POSITION">POSITION</option>
+                            <option value="CAPIBIL">CAPIBIL</option>
+                            <option value="STATUS">STATUS</option>
+                            <option value="TDATA">TDATA</option>
+                            <option value="IMGMETA">IMGMETA</option>
+                            <option value="LBMETA">LBMETA</option>
+                            <option value="POINT">POINT</option>
+                            <option value="TRAJ">TRAJ</option>
+                            <option value="NDARRAY">NDARRAY</option>
+                        </select>
+                    </div>
+                </div>
+                <div style="margin-top: 15px;">
+                    <button id="getBtn" onclick="getHubData()">Get</button>
+                </div>
+                
+                <div id="getStatus"></div>
+                <div id="getResults" style="margin-top: 15px;"></div>
+            </div>
+        </div>
+
+        <div class="section">
             <h2>Collaborate</h2>
             <div id="conferencingContent">
                 <button onclick="openConferenceClient()">Open Conference Client</button>
@@ -755,6 +790,56 @@
                 customInput.focus();
             } else {
                 customInput.style.display = 'none';
+            }
+        }
+
+        async function getHubData() {
+            const subscriber = document.getElementById('getSubscriber').value.trim();
+            const dataType = document.getElementById('getDataType').value.trim();
+            
+            const getBtn = document.getElementById('getBtn');
+            const statusDiv = document.getElementById('getStatus');
+            const resultsDiv = document.getElementById('getResults');
+            
+            getBtn.disabled = true;
+            getBtn.textContent = 'Loading...';
+            statusDiv.innerHTML = '';
+            resultsDiv.innerHTML = '';
+            
+            try {
+                // Mock the GET request for now
+                // In the future, this will call: GET /api/hub/{topic}?subscriber={subscriber}&dataType={dataType}
+                await new Promise(resolve => setTimeout(resolve, 500)); // Simulate network delay
+                
+                const mockResponse = {
+                    subscriber: subscriber || "unknown",
+                    dataType: dataType || "unknown",
+                    topic: document.getElementById('topic').value.trim() || "test-topic",
+                    context: {
+                        timestamp: new Date().toISOString(),
+                        subscriber: subscriber || "unknown",
+                        dataType: dataType || "unknown",
+                        data: "Mock response data"
+                    }
+                };
+                
+                // Display results
+                let resultsHTML = '<div style="background-color: #4a4a4a; padding: 15px; border-radius: 4px; margin-top: 10px;">';
+                resultsHTML += '<h4 style="margin-top: 0; color: #e0e0e0;">Response:</h4>';
+                resultsHTML += '<div style="max-height: 400px; overflow-y: auto; font-family: monospace; font-size: 12px;">';
+                resultsHTML += '<pre style="color: #e0e0e0; white-space: pre-wrap; word-wrap: break-word;">' + escapeHtml(JSON.stringify(mockResponse, null, 2)) + '</pre>';
+                resultsHTML += '</div></div>';
+                resultsDiv.innerHTML = resultsHTML;
+                
+                addMessage('sent', `GET request (mocked) - Subscriber: ${subscriber || 'none'}, DataType: ${dataType || 'none'}`, 'Get');
+                showStatus('getStatus', 'Request successful (mocked)');
+            } catch (error) {
+                console.error('Get error:', error);
+                showStatus('getStatus', `Error: ${error.message}`, true);
+                resultsDiv.innerHTML = '';
+            } finally {
+                getBtn.disabled = false;
+                getBtn.textContent = 'Get';
             }
         }
 
