@@ -827,7 +827,7 @@
                 let resultsHTML = '<div style="background-color: #4a4a4a; padding: 15px; border-radius: 4px; margin-top: 10px;">';
                 resultsHTML += '<h4 style="margin-top: 0; color: #e0e0e0;">Response:</h4>';
                 resultsHTML += '<div style="max-height: 400px; overflow-y: auto; font-family: monospace; font-size: 12px;">';
-                resultsHTML += '<pre style="color: #e0e0e0; white-space: pre-wrap; word-wrap: break-word;">' + escapeHtml(JSON.stringify(mockResponse, null, 2)) + '</pre>';
+                resultsHTML += '<pre style="color: #e0e0e0; white-space: pre-wrap; word-wrap: break-word;">' + JSON.stringify(mockResponse, null, 2).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;') + '</pre>';
                 resultsHTML += '</div></div>';
                 resultsDiv.innerHTML = resultsHTML;
                 
