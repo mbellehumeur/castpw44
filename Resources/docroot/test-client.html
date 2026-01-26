@@ -340,7 +340,7 @@
                     </div>
                 </div>
                 <div style="margin-top: 15px;">
-                    <button id="getBtn" onclick="getHubData()">Get</button>
+                    <button id="getBtn" onclick="getSubscriberData()">Get</button>
                 </div>
                 
                 <div id="getStatus"></div>
@@ -793,7 +793,7 @@
             }
         }
 
-        async function getHubData() {
+        async function getSubscriberData() {
             const subscriber = document.getElementById('getSubscriber').value.trim();
             const dataType = document.getElementById('getDataType').value.trim();
             
@@ -807,36 +807,52 @@
             resultsDiv.innerHTML = '';
             
             try {
-                // Mock the GET request for now
-                // In the future, this will call: GET /api/hub/{topic}?subscriber={subscriber}&dataType={dataType}
-                await new Promise(resolve => setTimeout(resolve, 500)); // Simulate network delay
+                if (!subscriber) {
+                    showStatus('getStatus', 'Error: Subscriber is required', true);
+                    return;
+                }
                 
-                const mockResponse = {
-                    subscriber: subscriber || "unknown",
-                    dataType: dataType || "unknown",
-                    topic: document.getElementById('topic').value.trim() || "test-topic",
-                    context: {
-                        timestamp: new Date().toISOString(),
-                        subscriber: subscriber || "unknown",
-                        dataType: dataType || "unknown",
-                        data: "Mock response data"
+                // Build the URL with query parameters
+                let url = `/api/hub/cast-get?subscriber=${encodeURIComponent(subscriber)}`;
+                if (dataType) {
+                    url += `&dataType=${encodeURIComponent(dataType)}`;
+                }
+                
+                const response = await fetch(url, {
+                    method: 'GET',
+                    headers: {
+                        'Content-Type': 'application/json'
                     }
-                };
+                });
                 
-                // Display results
-                let resultsHTML = '<div style="background-color: #4a4a4a; padding: 15px; border-radius: 4px; margin-top: 10px;">';
-                resultsHTML += '<h4 style="margin-top: 0; color: #e0e0e0;">Response:</h4>';
-                resultsHTML += '<div style="max-height: 400px; overflow-y: auto; font-family: monospace; font-size: 12px;">';
-                resultsHTML += '<pre style="color: #e0e0e0; white-space: pre-wrap; word-wrap: break-word;">' + JSON.stringify(mockResponse, null, 2).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;') + '</pre>';
-                resultsHTML += '</div></div>';
-                resultsDiv.innerHTML = resultsHTML;
-                
-                addMessage('sent', `GET request (mocked) - Subscriber: ${subscriber || 'none'}, DataType: ${dataType || 'none'}`, 'Get');
-                showStatus('getStatus', 'Request successful (mocked)');
+                if (response.ok) {
+                    const responseData = await response.json();
+                    
+                    // Display results
+                    let resultsHTML = '<div style="background-color: #4a4a4a; padding: 15px; border-radius: 4px; margin-top: 10px;">';
+                    resultsHTML += '<h4 style="margin-top: 0; color: #e0e0e0;">Response:</h4>';
+                    resultsHTML += '<div style="max-height: 400px; overflow-y: auto; font-family: monospace; font-size: 12px;">';
+                    resultsHTML += '<pre style="color: #e0e0e0; white-space: pre-wrap; word-wrap: break-word;">' + JSON.stringify(responseData, null, 2).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;') + '</pre>';
+                    resultsHTML += '</div></div>';
+                    resultsDiv.innerHTML = resultsHTML;
+                    
+                    const statusMsg = responseData.exists 
+                        ? (responseData.connected ? 'Subscriber exists and is connected' : 'Subscriber exists but is not connected')
+                        : 'Subscriber does not exist';
+                    showStatus('getStatus', statusMsg, !responseData.exists);
+                    
+                    addMessage('received', `GET response - Subscriber: ${subscriber}, Exists: ${responseData.exists}, Connected: ${responseData.connected}`, 'Get');
+                } else {
+                    const errorText = await response.text();
+                    showStatus('getStatus', `Error: ${response.status} ${errorText}`, true);
+                    resultsDiv.innerHTML = '';
+                    addMessage('error', `GET request failed: ${response.status}`, 'Get');
+                }
             } catch (error) {
                 console.error('Get error:', error);
                 showStatus('getStatus', `Error: ${error.message}`, true);
                 resultsDiv.innerHTML = '';
+                addMessage('error', `GET request error: ${error.message}`, 'Get');
             } finally {
                 getBtn.disabled = false;
                 getBtn.textContent = 'Get';

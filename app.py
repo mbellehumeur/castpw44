@@ -842,6 +842,72 @@ async def get_favicon():
         raise HTTPException(status_code=404, detail="Favicon not found")
 
 
+@app.get("/api/hub/cast-get")
+@app.get("/api/hub/cast-get/")
+async def get_cast_subscriber(request: Request):
+    """Check if a subscriber exists and is connected"""
+    subscriber = request.query_params.get("subscriber", "").strip()
+    data_type = request.query_params.get("dataType", "").strip()
+    
+    if not subscriber:
+        raise HTTPException(status_code=400, detail="Missing 'subscriber' parameter")
+    
+    # Check if subscriber has a subscription
+    subscriber_exists = False
+    subscriber_connected = False
+    subscription_info = None
+    
+    # Debug: log all subscriptions for troubleshooting
+    all_subscriptions = cast_hub.get_subscriptions()
+    cast_hub.log(f"Checking subscriber '{subscriber}' against {len(all_subscriptions)} subscriptions")
+    for sub in all_subscriptions:
+        sub_name = sub.get("subscriber", "").strip()
+        if sub_name:
+            cast_hub.log(f"  Found subscription: subscriber='{sub_name}', topic='{sub.get('topic', '')}'")
+        if sub_name == subscriber:
+            subscriber_exists = True
+            subscription_info = sub
+            
+            # Check if they have an active WebSocket connection
+            websocket_endpoint = sub.get("websocket_endpoint")
+            if websocket_endpoint and websocket_endpoint in cast_hub.websocket_connections:
+                subscriber_connected = True
+            break
+    
+    # If subscriber exists and is connected, send message with dataType
+    if subscriber_exists and subscriber_connected and subscription_info:
+        websocket_endpoint = subscription_info.get("websocket_endpoint")
+        if websocket_endpoint and websocket_endpoint in cast_hub.websocket_connections:
+            try:
+                websocket = cast_hub.websocket_connections[websocket_endpoint]
+                
+                # Create message with dataType request
+                message = {
+                    "type": "get_request",
+                    "dataType": data_type if data_type else None,
+                    "timestamp": datetime.now().isoformat(),
+                    "subscriber": subscriber
+                }
+                message_json = json.dumps(message)
+                
+                await websocket.send_text(message_json)
+                cast_hub.log(f"Sent get request message to subscriber '{subscriber}' with dataType '{data_type}'")
+                
+            except Exception as e:
+                cast_hub.log(f"Error sending WebSocket message to subscriber '{subscriber}': {type(e).__name__}: {e}")
+                # Mark as not connected if send fails
+                subscriber_connected = False
+    
+    return {
+        "subscriber": subscriber,
+        "dataType": data_type if data_type else None,
+        "exists": subscriber_exists,
+        "connected": subscriber_connected,
+        "topic": subscription_info.get("topic") if subscription_info else None,
+        "endpoint": subscription_info.get("websocket_endpoint") if subscription_info else None
+    }
+
+
 @app.get("/api/hub/{topic}")
 async def get_hub_topic(topic: str, request: Request):
     """Get hub topic information or authenticate"""
