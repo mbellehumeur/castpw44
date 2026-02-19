@@ -14,6 +14,8 @@ Requirements:
     
     Note: Form data will work without python-multipart by parsing raw body,
     but python-multipart provides better form data parsing support.
+
+    slicer.util.pip_install('fastapi', 'uvicorn', 'python-multipart', 'gunicorn')
 """
 
 import sys
@@ -23,7 +25,9 @@ import uuid
 import urllib.parse
 import hmac
 import hashlib
-from typing import Dict, List, Optional
+import glob
+import xml.etree.ElementTree as ET
+from typing import Dict, List, Optional, Any
 from datetime import datetime
 
 # Try to import FastAPI - install with: pip install fastapi uvicorn
@@ -126,6 +130,7 @@ class CastHub:
         self.last_admin_refresh_time: float = 0.0  # Track last admin refresh time for rate limiting
         self.pending_admin_refresh_task = None  # Track pending refresh task (to cancel if needed)
         self.single_user_mode: bool = False  # When enabled, token endpoint always returns topic 'SINGLE-USER'
+        self.pending_get_requests: Dict[str, any] = {}  # request_id -> Queue for responses
     
     def log(self, message: str):
         """Add a log message to the in-memory log buffer"""
@@ -842,6 +847,67 @@ async def get_favicon():
         raise HTTPException(status_code=404, detail="Favicon not found")
 
 
+def _load_sceneview_from_folder(folder_path: str) -> Optional[Dict[str, Any]]:
+    """Load View, Slice, and Camera data from the most recent *Scene*.mrml or *.mrml in folder_path."""
+    if not folder_path or not os.path.isdir(folder_path):
+        return None
+    pattern = os.path.join(folder_path, "*.mrml")
+    files = glob.glob(pattern)
+    if not files:
+        return None
+    scene_files = [f for f in files if "Scene" in os.path.basename(f)]
+    candidates = scene_files if scene_files else files
+    best = max(candidates, key=lambda f: os.path.getmtime(f))
+    try:
+        tree = ET.parse(best)
+        root = tree.getroot()
+    except ET.ParseError:
+        return None
+
+    cameras_by_tag: Dict[str, Dict[str, Any]] = {}
+    for cam in root.findall("Camera"):
+        tag = (cam.get("singletonTag") or cam.get("layoutLabel") or "").strip()
+        cameras_by_tag[tag] = {
+            "position": cam.get("position"),
+            "focalPoint": cam.get("focalPoint"),
+            "viewUp": cam.get("viewUp"),
+            "viewAngle": cam.get("viewAngle"),
+            "parallelProjection": cam.get("parallelProjection"),
+            "parallelScale": cam.get("parallelScale"),
+        }
+
+    viewports: List[Dict[str, Any]] = []
+    for view in root.findall("View"):
+        tag = (view.get("layoutLabel") or view.get("layoutName") or view.get("singletonTag") or "").strip()
+        v: Dict[str, Any] = {
+            "type": "View",
+            "id": view.get("id"),
+            "name": view.get("name"),
+            "layoutLabel": view.get("layoutLabel"),
+            "layoutName": view.get("layoutName"),
+            "fieldOfView": view.get("fieldOfView"),
+        }
+        if tag and tag in cameras_by_tag:
+            v["camera"] = cameras_by_tag[tag]
+        viewports.append(v)
+
+    for sl in root.findall("Slice"):
+        s: Dict[str, Any] = {
+            "type": "Slice",
+            "id": sl.get("id"),
+            "name": sl.get("name"),
+            "layoutLabel": sl.get("layoutLabel"),
+            "layoutName": sl.get("layoutName"),
+            "orientation": sl.get("orientation"),
+            "fieldOfView": sl.get("fieldOfView"),
+            "dimensions": sl.get("dimensions"),
+            "sliceToRAS": sl.get("sliceToRAS"),
+        }
+        viewports.append(s)
+
+    return {"source": "sceneview", "file": os.path.basename(best), "viewports": viewports}
+
+
 @app.get("/api/hub/cast-get")
 @app.get("/api/hub/cast-get/")
 async def get_cast_subscriber(request: Request):
@@ -851,6 +917,23 @@ async def get_cast_subscriber(request: Request):
     
     if not subscriber:
         raise HTTPException(status_code=400, detail="Missing 'subscriber' parameter")
+    
+    # When subscriber is 3DSLICER, load sceneview from in-project sceneview folder
+    if subscriber.upper() == "3DSLICER":
+        sceneview_folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sceneview")
+        response_data = _load_sceneview_from_folder(sceneview_folder)
+        if response_data is None:
+            response_data = {"error": "No sceneview data found", "folder": sceneview_folder}
+        cast_hub.log(f"Loaded sceneview for subscriber 3DSLICER from {sceneview_folder}")
+        return {
+            "subscriber": subscriber,
+            "dataType": data_type if data_type else None,
+            "exists": True,
+            "connected": False,
+            "topic": None,
+            "endpoint": None,
+            "response": response_data,
+        }
     
     # Check if subscriber has a subscription
     subscriber_exists = False
@@ -874,29 +957,61 @@ async def get_cast_subscriber(request: Request):
                 subscriber_connected = True
             break
     
-    # If subscriber exists and is connected, send message with dataType
+    # If subscriber exists and is connected, send message and wait for response
+    response_data = None
+    request_id = None
     if subscriber_exists and subscriber_connected and subscription_info:
         websocket_endpoint = subscription_info.get("websocket_endpoint")
         if websocket_endpoint and websocket_endpoint in cast_hub.websocket_connections:
             try:
+                import asyncio
                 websocket = cast_hub.websocket_connections[websocket_endpoint]
                 
-                # Create message with dataType request
-                message = {
-                    "type": "get_request",
-                    "dataType": data_type if data_type else None,
+                # Generate unique request ID
+                request_id = str(uuid.uuid4())
+                
+                # Create queue for response
+                response_queue = asyncio.Queue()
+                cast_hub.pending_get_requests[request_id] = response_queue
+                
+                # Create message with dataType request in event format
+                topic_name = subscription_info.get("topic", "")
+                notification = {
                     "timestamp": datetime.now().isoformat(),
-                    "subscriber": subscriber
+                    "id": str(uuid.uuid4()),
+                    "event": {
+                        "hub.topic": topic_name,
+                        "hub.event": "get-request",
+                        "context": {
+                            "requestId": request_id,
+                            "dataType": data_type if data_type else None
+                        }
+                    }
                 }
-                message_json = json.dumps(message)
+                message_json = json.dumps(notification)
                 
                 await websocket.send_text(message_json)
-                cast_hub.log(f"Sent get request message to subscriber '{subscriber}' with dataType '{data_type}'")
+                cast_hub.log(f"Sent get request message to subscriber '{subscriber}' with dataType '{data_type}', requestId: {request_id}")
+                
+                # Wait for response with timeout (5 seconds)
+                try:
+                    response_data = await asyncio.wait_for(response_queue.get(), timeout=5.0)
+                    cast_hub.log(f"Received response for requestId {request_id}")
+                except asyncio.TimeoutError:
+                    cast_hub.log(f"Timeout waiting for response to requestId {request_id}")
+                    response_data = {"error": "Timeout waiting for response"}
+                finally:
+                    # Clean up
+                    if request_id in cast_hub.pending_get_requests:
+                        del cast_hub.pending_get_requests[request_id]
                 
             except Exception as e:
                 cast_hub.log(f"Error sending WebSocket message to subscriber '{subscriber}': {type(e).__name__}: {e}")
                 # Mark as not connected if send fails
                 subscriber_connected = False
+                # Clean up request if it exists
+                if request_id and request_id in cast_hub.pending_get_requests:
+                    del cast_hub.pending_get_requests[request_id]
     
     return {
         "subscriber": subscriber,
@@ -904,7 +1019,8 @@ async def get_cast_subscriber(request: Request):
         "exists": subscriber_exists,
         "connected": subscriber_connected,
         "topic": subscription_info.get("topic") if subscription_info else None,
-        "endpoint": subscription_info.get("websocket_endpoint") if subscription_info else None
+        "endpoint": subscription_info.get("websocket_endpoint") if subscription_info else None,
+        "response": response_data
     }
 
 
@@ -1253,6 +1369,18 @@ async def websocket_endpoint(websocket: WebSocket, endpoint: str):
             try:
                 message = json.loads(data)
                 cast_hub.log(f"Received WebSocket message from {endpoint}: {message}")
+                
+                # Check if this is a response to a pending get_request (in event format)
+                event = message.get("event", {})
+                if event.get("hub.event") == "get-response":
+                    context = event.get("context", {})
+                    request_id = context.get("requestId")
+                    if request_id and request_id in cast_hub.pending_get_requests:
+                        response_queue = cast_hub.pending_get_requests[request_id]
+                        await response_queue.put(message)
+                        cast_hub.log(f"Routed get-response for requestId {request_id}")
+                    else:
+                        cast_hub.log(f"Received get-response for unknown requestId {request_id}")
                 
                 # Respond to pong messages
                 if message.get("type") == "pong":
