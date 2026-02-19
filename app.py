@@ -1633,16 +1633,16 @@ async def post_oauth_token(request: Request):
     
     # Check if single-user mode is enabled
     if cast_hub.single_user_mode:
-        # Always return SINGLE-USER topic in single-user mode
         topic = "SINGLE-USER"
         user_name = "SINGLE-USER"
-        subscriber_name = "SINGLE-USER"
-        count = 0
-        
-        # Check if client_product_name is provided for subscriber_name
+        cast_hub.user_count += 1
+        count = cast_hub.user_count
+
         client_product_name = request_data.get("client_product_name")
         if client_product_name:
-            subscriber_name = client_product_name + "-" + user_name
+            subscriber_name = f"SINGLE-USER-{client_product_name}-{count}"
+        else:
+            subscriber_name = f"SINGLE-USER-APP-{count}"
     # Check if topic is provided - if so, use it directly without incrementing count
     elif request_data.get("topic"):
         provided_topic = request_data.get("topic")

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<MRML version="Slicer 5.11.0 34295">
+<Layout
+  id="vtkMRMLLayoutNode1" name="Layout" hideFromEditors="true" selectable="true" selected="false" attributes="Sequences.BaseName:Layout" currentViewArrangement="2" guiPanelVisibility="1" bottomPanelVisibility ="1" guiPanelLR="0" collapseSliceControllers="0"
+ numberOfCompareViewRows="1" numberOfCompareViewColumns="1" mainPanelSize="400" secondaryPanelSize="400"></Layout>
+ <Sequence
+  id="vtkMRMLSequenceNodeSequenceIndex" name="Sequence" hideFromEditors="false" selectable="true" selected="false" singletonTag="SequenceIndex" userTags=""  indexName="time"  indexUnit="s"  indexType="numeric"  numericIndexValueTolerance="0.001"  indexValues="vtkMRMLLayoutNode1:0.1" ></Sequence>
+</MRML>

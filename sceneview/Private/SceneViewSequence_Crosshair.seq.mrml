@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<MRML version="Slicer 5.11.0 34295">
+<Crosshair
+  id="vtkMRMLCrosshairNode1" name="Crosshair" hideFromEditors="true" selectable="true" selected="false" attributes="Sequences.BaseName:Crosshair" crosshairMode="NoCrosshair" crosshairBehavior="OffsetJumpSlice" crosshairThickness="Fine" crosshairRAS="0 0 0"></Crosshair>
+ <Sequence
+  id="vtkMRMLSequenceNodeSequenceIndex" name="Sequence" hideFromEditors="false" selectable="true" selected="false" singletonTag="SequenceIndex" userTags=""  indexName="time"  indexUnit="s"  indexType="numeric"  numericIndexValueTolerance="0.001"  indexValues="vtkMRMLCrosshairNode1:0.1" ></Sequence>
+</MRML>

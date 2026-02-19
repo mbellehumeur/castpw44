@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<MRML version="Slicer 5.11.0 34295">
+<SliceComposite
+  id="vtkMRMLSliceCompositeNode1" name="SliceComposite_2" hideFromEditors="true" selectable="true" selected="false" attributes="Sequences.BaseName:SliceComposite_2" compositing="0" clipToBackgroundVolume="true" foregroundOpacity="0" labelOpacity="1" linkedControl="0" hotLinkedControl="0" fiducialVisibility="1" fiducialLabelVisibility="1" doPropagateVolumeSelection="1"></SliceComposite>
+ <Sequence
+  id="vtkMRMLSequenceNodeSequenceIndex" name="Sequence" hideFromEditors="false" selectable="true" selected="false" singletonTag="SequenceIndex" userTags=""  indexName="time"  indexUnit="s"  indexType="numeric"  numericIndexValueTolerance="0.001"  indexValues="vtkMRMLSliceCompositeNode1:0.1" ></Sequence>
+</MRML>
