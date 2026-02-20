@@ -22,23 +22,27 @@ import sys
 import os
 import json
 import uuid
+import time
+import asyncio
+import socket
 import urllib.parse
+import urllib.request
 import hmac
 import hashlib
 import glob
 import xml.etree.ElementTree as ET
 from typing import Dict, List, Optional, Any
 from datetime import datetime
+from urllib.parse import parse_qs
 
 # Try to import FastAPI - install with: pip install fastapi uvicorn
 try:
     from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Response, HTTPException
     from fastapi.middleware.cors import CORSMiddleware
-    from fastapi.responses import JSONResponse
+    from fastapi.responses import JSONResponse, FileResponse, RedirectResponse
     from fastapi.staticfiles import StaticFiles
     from starlette.middleware.base import BaseHTTPMiddleware
     import uvicorn
-    HAS_FASTAPI = True
 except ImportError:
     print("ERROR: FastAPI not installed. Install with: pip install fastapi uvicorn")
     sys.exit(1)
@@ -117,6 +121,7 @@ class CastHub:
         self.admin_websockets: List[Dict] = []  # Track admin connections with metadata: [{"websocket": WebSocket, "location": str, "connected_at": str}]
         self.log_websockets: List[Dict] = []  # Track log viewer connections: [{"websocket": WebSocket, "location": str, "connected_at": str}]
         self.log_queue: List[str] = []  # Queue of new log entries to broadcast
+        self.log_queue_total: int = 0  # Monotonic counter of total entries ever added
         self.conferences: List[Dict] = []
         self.last_context: Dict[str, Dict] = {}  # topic -> context
         self.audit_log: List[Dict] = []  # List of logged events
@@ -130,7 +135,7 @@ class CastHub:
         self.last_admin_refresh_time: float = 0.0  # Track last admin refresh time for rate limiting
         self.pending_admin_refresh_task = None  # Track pending refresh task (to cancel if needed)
         self.single_user_mode: bool = False  # When enabled, token endpoint always returns topic 'SINGLE-USER'
-        self.pending_get_requests: Dict[str, any] = {}  # request_id -> Queue for responses
+        self.pending_get_requests: Dict[str, Any] = {}  # request_id -> Queue for responses
     
     def log(self, message: str):
         """Add a log message to the in-memory log buffer"""
@@ -144,30 +149,9 @@ class CastHub:
         
         # Add to queue for WebSocket broadcasting
         self.log_queue.append(log_entry)
-        # Keep queue size reasonable
+        self.log_queue_total += 1
         if len(self.log_queue) > 1000:
             self.log_queue = self.log_queue[-1000:]
-    
-    async def broadcast_log(self, log_entry: str):
-        """Broadcast a log entry to all connected log WebSocket clients"""
-        if not self.log_websockets:
-            return
-        
-        disconnected = []
-        for log_client in self.log_websockets:
-            try:
-                await log_client["websocket"].send_json({
-                    "type": "log",
-                    "message": log_entry,
-                    "timestamp": datetime.now().isoformat()
-                })
-            except Exception as e:
-                self.log(f"Error broadcasting log to client: {e}")
-                disconnected.append(log_client["websocket"])
-        
-        # Clean up disconnected websockets
-        for ws in disconnected:
-            self.unregister_log_websocket(ws)
     
     def register_log_websocket(self, websocket: WebSocket, location: str = "unknown"):
         """Register a log viewer WebSocket connection"""
@@ -211,8 +195,6 @@ class CastHub:
             return {"status": 400, "data": "Missing required parameters"}
         
         try:
-            # Send GET request to callback with challenge
-            import urllib.request
             challenge_url = f"{callback}?hub.challenge={secret}&hub.topic={topic}"
             req = urllib.request.Request(challenge_url)
             with urllib.request.urlopen(req, timeout=5) as response:
@@ -269,11 +251,7 @@ class CastHub:
             )
             protocol = "wss" if is_secure else "ws"
             
-            # Remove port from host if it contains azurewebsites.net (Azure handles this)
-            if "azurewebsites.net" in request_host or ":" not in request_host:
-                websocket_url = f"{protocol}://{request_host}/bind/{websocket_endpoint}"
-            else:
-                websocket_url = f"{protocol}://{request_host}/bind/{websocket_endpoint}"
+            websocket_url = f"{protocol}://{request_host}/bind/{websocket_endpoint}"
             
             subscription = {
                 "channel": channel_type,
@@ -385,7 +363,6 @@ class CastHub:
         if not self.admin_websockets:
             return
         
-        import time
         self.last_admin_refresh_time = time.time()
         
         message = {
@@ -412,8 +389,6 @@ class CastHub:
         if not self.admin_websockets:
             return
         
-        import time
-        import asyncio
         current_time = time.time()
         time_since_last = current_time - self.last_admin_refresh_time
         
@@ -544,7 +519,11 @@ class CastHub:
         self.conferences.clear()
         self.audit_log.clear()
         self.audit_log_counter = 0
+        self.user_count = 0
+        self.product_counts.clear()
+        self.page_loads = 0
         self.last_context.clear()
+        self.pending_get_requests.clear()
         
         self.log(f"Hub reset - all subscriptions, conferences, audit log cleared, and {len(disconnected_endpoints)} WebSocket(s) disconnected")
 
@@ -554,6 +533,34 @@ cast_hub = CastHub()
 
 # Add the request logging middleware (after cast_hub is created)
 app.add_middleware(RequestLoggingMiddleware)
+
+
+async def _parse_request_body(request: Request) -> dict:
+    """Parse request body as JSON or form data, with fallback to raw body parsing."""
+    content_type = request.headers.get("content-type", "")
+    if "application/json" in content_type:
+        return await request.json()
+    try:
+        form_data = await request.form()
+        return dict(form_data)
+    except AssertionError as e:
+        if "python-multipart" in str(e):
+            body = await request.body()
+            if body:
+                parsed = parse_qs(body.decode())
+                return {k: v[0] if len(v) == 1 else v for k, v in parsed.items()}
+            return {}
+        raise
+
+
+def _serve_html_page(filename: str):
+    """Serve an HTML file from Resources/docroot, or redirect to static mount."""
+    html_path = os.path.join(base_dir, "Resources", "docroot", filename)
+    if os.path.exists(html_path):
+        with open(html_path, 'r', encoding='utf-8') as f:
+            html_content = f.read()
+        return Response(content=html_content, media_type="text/html")
+    return RedirectResponse(url=f"/static/{filename}", status_code=302)
 
 
 @app.get("/topics")
@@ -592,26 +599,8 @@ async def get_conference():
 @app.post("/conference")
 async def post_conference(request: Request):
     """Create a conference"""
-    content_type = request.headers.get("content-type", "")
     try:
-        if "application/json" in content_type:
-            data = await request.json()
-        else:
-            # Try form data
-            try:
-                form_data = await request.form()
-                data = dict(form_data)
-            except AssertionError as e:
-                if "python-multipart" in str(e):
-                    body = await request.body()
-                    if body:
-                        from urllib.parse import parse_qs
-                        parsed = parse_qs(body.decode())
-                        data = {k: v[0] if len(v) == 1 else v for k, v in parsed.items()}
-                    else:
-                        raise HTTPException(status_code=400, detail="No data provided")
-                else:
-                    raise
+        data = await _parse_request_body(request)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Could not parse request: {e}")
     
@@ -632,26 +621,8 @@ async def post_conference(request: Request):
 @app.delete("/conference")
 async def delete_conference(request: Request):
     """Delete a conference"""
-    content_type = request.headers.get("content-type", "")
     try:
-        if "application/json" in content_type:
-            data = await request.json()
-        else:
-            # Try form data
-            try:
-                form_data = await request.form()
-                data = dict(form_data)
-            except AssertionError as e:
-                if "python-multipart" in str(e):
-                    body = await request.body()
-                    if body:
-                        from urllib.parse import parse_qs
-                        parsed = parse_qs(body.decode())
-                        data = {k: v[0] if len(v) == 1 else v for k, v in parsed.items()}
-                    else:
-                        raise HTTPException(status_code=400, detail="No data provided")
-                else:
-                    raise
+        data = await _parse_request_body(request)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Could not parse request: {e}")
     
@@ -671,10 +642,9 @@ async def delete_conference(request: Request):
     return {"removed": len(removed)}
 
 
-@app.post("/status")
-async def post_status():
+@app.get("/status")
+async def get_status():
     """Status endpoint - returns hub status"""
-    import socket
     hostname = socket.gethostname()
     status_msg = f"Hub Status\n"
     status_msg += f"Hostname: {hostname}\n"
@@ -687,7 +657,7 @@ async def post_status():
         ip = s.getsockname()[0]
         s.close()
         status_msg += f"IP: {ip}\n"
-    except:
+    except Exception:
         pass
     
     status_msg += f"Subscriptions: {len(cast_hub.get_subscriptions())}\n"
@@ -700,78 +670,30 @@ async def post_status():
 
 @app.get("/api/hub/test-client")
 @app.get("/api/hub/test-client/")
-async def get_test_client(request: Request):
+async def get_test_client():
     """Get test client page for subscribing and publishing"""
-    # Use the same path resolution as the static mount
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    html_path = os.path.join(base_dir, "Resources", "docroot", "test-client.html")
-    
-    if os.path.exists(html_path):
-        # Read and return the file content directly
-        with open(html_path, 'r', encoding='utf-8') as f:
-            html_content = f.read()
-        return Response(content=html_content, media_type="text/html")
-    
-    # If file not found, try redirecting to static mount
-    from fastapi.responses import RedirectResponse
-    return RedirectResponse(url="/static/test-client.html", status_code=302)
+    return _serve_html_page("test-client.html")
 
 
 @app.get("/api/hub/conference-client")
 @app.get("/api/hub/conference-client/")
-async def get_conference_client(request: Request):
+async def get_conference_client():
     """Get conference client page"""
-    # Use the same path resolution as the static mount
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    html_path = os.path.join(base_dir, "Resources", "docroot", "conference-client.html")
-    
-    if os.path.exists(html_path):
-        # Read and return the file content directly
-        with open(html_path, 'r', encoding='utf-8') as f:
-            html_content = f.read()
-        return Response(content=html_content, media_type="text/html")
-    
-    # If file not found, try redirecting to static mount
-    from fastapi.responses import RedirectResponse
-    return RedirectResponse(url="/static/conference-client.html", status_code=302)
+    return _serve_html_page("conference-client.html")
 
 
 @app.get("/api/hub/admin")
 @app.get("/api/hub/admin/")
-async def get_hub_status(request: Request):
+async def get_hub_status():
     """Get hub status page showing all users and endpoints"""
-    # Use the same path resolution as the static mount
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    html_path = os.path.join(base_dir, "Resources", "docroot", "admin.html")
-    
-    if os.path.exists(html_path):
-        # Read and return the file content directly
-        with open(html_path, 'r', encoding='utf-8') as f:
-            html_content = f.read()
-        return Response(content=html_content, media_type="text/html")
-    
-    # If file not found, try redirecting to static mount
-    from fastapi.responses import RedirectResponse
-    return RedirectResponse(url="/static/admin.html", status_code=302)
+    return _serve_html_page("admin.html")
 
 
 @app.get("/api/hub/logs")
 @app.get("/api/hub/logs/")
-async def get_logs_viewer(request: Request):
+async def get_logs_viewer():
     """Get logs viewer page"""
-    # Use the same path resolution as the static mount
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    html_path = os.path.join(base_dir, "Resources", "docroot", "logs.html")
-    
-    if os.path.exists(html_path):
-        # Read and return the file content directly
-        with open(html_path, 'r', encoding='utf-8') as f:
-            html_content = f.read()
-        return Response(content=html_content, media_type="text/html")
-    
-    # If file not found, try redirecting to static mount
-    from fastapi.responses import RedirectResponse
-    return RedirectResponse(url="/static/logs.html", status_code=302)
+    return _serve_html_page("logs.html")
 
 
 @app.get("/api/hub/status")
@@ -816,16 +738,11 @@ async def clear_audit_log():
 @app.get("/images/3DSlicer-DesktopIcon.png")
 async def get_slicer_icon():
     """Serve the 3D Slicer desktop icon"""
-    import os
-    # First try root directory
     icon_path = os.path.join(os.path.dirname(__file__), "3DSlicer-DesktopIcon.png")
     if os.path.exists(icon_path):
-        from fastapi.responses import FileResponse
         return FileResponse(icon_path, media_type="image/png")
-    # Fallback to Resources directory
     icon_path = os.path.join(os.path.dirname(__file__), "Resources", "docroot", "images", "3DSlicer-DesktopIcon.png")
     if os.path.exists(icon_path):
-        from fastapi.responses import FileResponse
         return FileResponse(icon_path, media_type="image/png")
     raise HTTPException(status_code=404, detail="Icon not found")
 
@@ -833,16 +750,12 @@ async def get_slicer_icon():
 @app.get("/favicon.ico")
 async def get_favicon():
     """Serve the favicon"""
-    import os
     favicon_path = os.path.join(os.path.dirname(__file__), "Resources", "docroot", "favicon.ico")
     if os.path.exists(favicon_path):
-        from fastapi.responses import FileResponse
         return FileResponse(favicon_path, media_type="image/x-icon")
     else:
-        # Fallback: try relative path from current working directory
         fallback_path = os.path.join("Modules", "Scripted", "Cast", "Resources", "docroot", "favicon.ico")
         if os.path.exists(fallback_path):
-            from fastapi.responses import FileResponse
             return FileResponse(fallback_path, media_type="image/x-icon")
         raise HTTPException(status_code=404, detail="Favicon not found")
 
@@ -940,13 +853,8 @@ async def get_cast_subscriber(request: Request):
     subscriber_connected = False
     subscription_info = None
     
-    # Debug: log all subscriptions for troubleshooting
-    all_subscriptions = cast_hub.get_subscriptions()
-    cast_hub.log(f"Checking subscriber '{subscriber}' against {len(all_subscriptions)} subscriptions")
-    for sub in all_subscriptions:
+    for sub in cast_hub.get_subscriptions():
         sub_name = sub.get("subscriber", "").strip()
-        if sub_name:
-            cast_hub.log(f"  Found subscription: subscriber='{sub_name}', topic='{sub.get('topic', '')}'")
         if sub_name == subscriber:
             subscriber_exists = True
             subscription_info = sub
@@ -964,7 +872,6 @@ async def get_cast_subscriber(request: Request):
         websocket_endpoint = subscription_info.get("websocket_endpoint")
         if websocket_endpoint and websocket_endpoint in cast_hub.websocket_connections:
             try:
-                import asyncio
                 websocket = cast_hub.websocket_connections[websocket_endpoint]
                 
                 # Generate unique request ID
@@ -1048,30 +955,10 @@ async def get_hub_topic(topic: str, request: Request):
 @app.post("/api/hub")
 async def post_hub(request: Request):
     """Handle subscription requests"""
-    # Parse form data or JSON
-    content_type = request.headers.get("content-type", "")
-    subscription_data = {}
-    
-    if "application/json" in content_type:
-        subscription_data = await request.json()
-    else:
-        # Try form data - may require python-multipart
-        try:
-            form_data = await request.form()
-            subscription_data = dict(form_data)
-        except AssertionError as e:
-            if "python-multipart" in str(e):
-                # Fall back to parsing raw body as form data
-                body = await request.body()
-                if body:
-                    try:
-                        from urllib.parse import parse_qs
-                        parsed = parse_qs(body.decode())
-                        subscription_data = {k: v[0] if len(v) == 1 else v for k, v in parsed.items()}
-                    except Exception:
-                        raise HTTPException(status_code=400, detail="Could not parse form data. Install python-multipart for better form data support.")
-            else:
-                raise
+    try:
+        subscription_data = await _parse_request_body(request)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Could not parse request: {e}")
     
     # Also get query parameters
     query_params = dict(request.query_params)
@@ -1201,15 +1088,12 @@ async def post_hub_topic(topic: str, request: Request):
                 callback = sub.get("callback")
                 if callback:
                     try:
-                        import urllib.request
                         req = urllib.request.Request(callback)
                         req.add_header("Content-Type", "application/json")
                         req.add_header("X-Hub-Signature", f"sha256={hmac_sig}")
                         req.data = notification_json.encode()
                         req.get_method = lambda: "POST"
                         
-                        # In production, this should be async (use aiohttp or httpx)
-                        import asyncio
                         loop = asyncio.get_event_loop()
                         await loop.run_in_executor(None, lambda: urllib.request.urlopen(req, timeout=5))
                         cast_hub.log(f"Sent WebSub notification to {callback}")
@@ -1275,33 +1159,10 @@ async def post_hub_topic(topic: str, request: Request):
 @app.delete("/api/hub")
 async def delete_hub(request: Request):
     """Handle DELETE /api/hub/ - clear all subscriptions"""
-    # Also support unsubscribe via DELETE with body
-    content_type = request.headers.get("content-type", "")
-    unsubscribe_data = {}
-    
-    if "application/json" in content_type:
-        try:
-            unsubscribe_data = await request.json()
-        except:
-            pass
-    else:
-        # Try form data
-        try:
-            form_data = await request.form()
-            unsubscribe_data = dict(form_data)
-        except AssertionError as e:
-            if "python-multipart" in str(e):
-                # Fall back to parsing raw body
-                body = await request.body()
-                if body:
-                    try:
-                        from urllib.parse import parse_qs
-                        parsed = parse_qs(body.decode())
-                        unsubscribe_data = {k: v[0] if len(v) == 1 else v for k, v in parsed.items()}
-                    except Exception:
-                        pass
-            else:
-                pass
+    try:
+        unsubscribe_data = await _parse_request_body(request)
+    except Exception:
+        unsubscribe_data = {}
     
     # If unsubscribe data provided, remove specific subscriptions
     if unsubscribe_data:
@@ -1326,8 +1187,6 @@ async def delete_hub(request: Request):
 @app.websocket("/bind/{endpoint}")
 async def websocket_endpoint(websocket: WebSocket, endpoint: str):
     """WebSocket endpoint for event delivery"""
-    import asyncio
-    
     await websocket.accept()
     cast_hub.log(f"WebSocket connection accepted for endpoint: {endpoint}")
     
@@ -1412,8 +1271,6 @@ async def websocket_endpoint(websocket: WebSocket, endpoint: str):
 @app.websocket("/ws/admin")
 async def admin_websocket_endpoint(websocket: WebSocket):
     """WebSocket endpoint for admin page - receives refresh commands"""
-    import asyncio
-    
     await websocket.accept()
     
     # Extract location information from request headers
@@ -1468,8 +1325,6 @@ async def admin_websocket_endpoint(websocket: WebSocket):
 @app.websocket("/ws/logs")
 async def logs_websocket_endpoint(websocket: WebSocket):
     """WebSocket endpoint for log viewer - streams application logs"""
-    import asyncio
-    
     await websocket.accept()
     
     # Extract location information from request
@@ -1506,19 +1361,19 @@ async def logs_websocket_endpoint(websocket: WebSocket):
     except Exception as e:
         cast_hub.log(f"Error sending initial logs: {e}")
     
-    # Background task to broadcast new logs
-    last_queue_size = [len(cast_hub.log_queue)]  # Use list to allow modification in nested function
+    # Track total log entries seen so far (monotonic, survives queue trimming)
+    last_seen_total = [cast_hub.log_queue_total]
     
     async def broadcast_new_logs():
         """Background task to check for new logs and broadcast them"""
         while True:
             try:
-                await asyncio.sleep(0.1)  # Check every 100ms
-                current_queue_size = len(cast_hub.log_queue)
+                await asyncio.sleep(0.1)
+                current_total = cast_hub.log_queue_total
                 
-                # If queue has grown, send new logs
-                if current_queue_size > last_queue_size[0]:
-                    new_logs = cast_hub.log_queue[last_queue_size[0]:]
+                if current_total > last_seen_total[0]:
+                    new_count = min(current_total - last_seen_total[0], len(cast_hub.log_queue))
+                    new_logs = cast_hub.log_queue[-new_count:] if new_count > 0 else []
                     for log_entry in new_logs:
                         try:
                             await websocket.send_json({
@@ -1528,8 +1383,8 @@ async def logs_websocket_endpoint(websocket: WebSocket):
                             })
                         except Exception as e:
                             cast_hub.log(f"Error sending log entry: {e}")
-                            break  # Connection likely closed
-                    last_queue_size[0] = current_queue_size
+                            break
+                    last_seen_total[0] = current_total
             except Exception as e:
                 cast_hub.log(f"Error in broadcast_new_logs: {e}")
                 break
@@ -1579,15 +1434,12 @@ async def reset_hub(request: Request):
     # Parse request body for single_user_mode
     single_user_mode = False
     try:
-        content_type = request.headers.get("content-type", "")
-        if "application/json" in content_type:
-            data = await request.json()
-            single_user_mode = data.get("single_user_mode", False)
-        else:
-            form_data = await request.form()
-            single_user_mode = form_data.get("single_user_mode", "false").lower() == "true"
-    except:
-        pass  # Default to False if parsing fails
+        data = await _parse_request_body(request)
+        single_user_mode = data.get("single_user_mode", False)
+        if isinstance(single_user_mode, str):
+            single_user_mode = single_user_mode.lower() == "true"
+    except Exception:
+        pass
     
     # Set single-user mode
     cast_hub.single_user_mode = single_user_mode
@@ -1603,29 +1455,10 @@ async def reset_hub(request: Request):
 @app.post("/oauth/token")
 async def post_oauth_token(request: Request):
     """Handle POST /oauth/token - OAuth token endpoint"""
-    # Parse request data (form data or JSON)
-    content_type = request.headers.get("content-type", "")
-    request_data = {}
-    
-    if "application/json" in content_type:
-        try:
-            request_data = await request.json()
-        except:
-            pass
-    else:
-        # Try form data
-        try:
-            form_data = await request.form()
-            request_data = dict(form_data)
-        except:
-            try:
-                body = await request.body()
-                if body:
-                    from urllib.parse import parse_qs
-                    parsed = parse_qs(body.decode())
-                    request_data = {k: v[0] if len(v) == 1 else v for k, v in parsed.items()}
-            except:
-                pass
+    try:
+        request_data = await _parse_request_body(request)
+    except Exception:
+        request_data = {}
     
     # Also check query parameters
     query_params = dict(request.query_params)
@@ -1733,7 +1566,7 @@ def main():
     print(f"  GET    http://{args.host}:{args.port}/conference")
     print(f"  POST   http://{args.host}:{args.port}/conference")
     print(f"  DELETE http://{args.host}:{args.port}/conference")
-    print(f"  POST   http://{args.host}:{args.port}/status")
+    print(f"  GET    http://{args.host}:{args.port}/status")
     print(f"  POST   http://{args.host}:{args.port}/oauth/token")
     print("")
     print(f"WebSocket connections: ws://{args.host}:{args.port}/bind/<endpoint>")
