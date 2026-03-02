@@ -611,7 +611,47 @@ async def post_conference(request: Request):
     }
     cast_hub.conferences.append(conference)
     cast_hub.log(f"Conference created: {conference.get('title')}")
-    
+
+    # Send conference-start to all participants' WebSockets (title + subscriber names)
+    conference_user = conference.get("user")
+    attendee_topics = conference.get("topics", [])
+    all_participant_topics = [conference_user] + attendee_topics
+    subscriber_names = []
+    sent_endpoints = set()
+    for participant_topic in all_participant_topics:
+        for sub in cast_hub.subscriptions:
+            if sub.get("topic") == participant_topic and sub.get("channel") == "websocket":
+                name = sub.get("subscriber", "unknown")
+                if name not in subscriber_names:
+                    subscriber_names.append(name)
+                break
+    # Cast-style message: timestamp, id, event with hub.topic, hub.event, context
+    notification = {
+        "timestamp": datetime.now().isoformat(),
+        "id": str(uuid.uuid4()),
+        "event": {
+            "hub.topic": conference_user or "",
+            "hub.event": "conference-start",
+            "context": {
+                "title": conference.get("title") or "",
+                "participants": subscriber_names,
+            },
+        },
+    }
+    message_json = json.dumps(notification)
+    for participant_topic in all_participant_topics:
+        for sub in cast_hub.subscriptions:
+            if sub.get("topic") == participant_topic and sub.get("channel") == "websocket":
+                endpoint = sub.get("websocket_endpoint")
+                if endpoint and endpoint in cast_hub.websocket_connections and endpoint not in sent_endpoints:
+                    try:
+                        ws = cast_hub.websocket_connections[endpoint]
+                        await ws.send_text(message_json)
+                        sent_endpoints.add(endpoint)
+                        cast_hub.log(f"Sent conference-start to participant: {sub.get('subscriber')}")
+                    except Exception as e:
+                        cast_hub.log(f"Conference-start WebSocket error: {e}")
+
     # Send admin refresh command (rate limited)
     await cast_hub.send_admin_refresh_command()
     
@@ -1032,6 +1072,9 @@ async def post_hub_topic(topic: str, request: Request):
         # Calculate HMAC signature
         notification_json = json.dumps(notification)
         
+        # Publisher subscriber to suppress echo (from hub.source in event)
+        publisher_subscriber = event.get("hub.source", "").strip() or None
+        
         # Track endpoints that have already received the message to prevent duplicates
         sent_endpoints = set()
         
@@ -1053,6 +1096,9 @@ async def post_hub_topic(topic: str, request: Request):
                 hmac_sig = hmac.new(secret.encode(), notification_json.encode(), hashlib.sha256).hexdigest()
             
             if channel == "websocket":
+                # Skip publisher (suppress echo) when hub.source matches
+                if publisher_subscriber and sub.get("subscriber") == publisher_subscriber:
+                    continue
                 # WebSocket delivery - async
                 endpoint = sub.get("websocket_endpoint")
                 if endpoint and endpoint in cast_hub.websocket_connections:
@@ -1084,6 +1130,9 @@ async def post_hub_topic(topic: str, request: Request):
                     else:
                         cast_hub.log(f"WebSocket not bound for subscription: {sub.get('subscriber')}")
             else:
+                # Skip publisher (suppress echo) when hub.source matches
+                if publisher_subscriber and sub.get("subscriber") == publisher_subscriber:
+                    continue
                 # WebSub delivery - HTTP POST to callback (can be async but using sync for now)
                 callback = sub.get("callback")
                 if callback:
@@ -1124,6 +1173,9 @@ async def post_hub_topic(topic: str, request: Request):
                     # Find subscriptions for participant
                     for sub in cast_hub.subscriptions:
                         if sub.get("topic") == participant_topic and sub.get("channel") == "websocket":
+                            # Skip publisher (suppress echo) when hub.source matches
+                            if publisher_subscriber and sub.get("subscriber") == publisher_subscriber:
+                                continue
                             endpoint = sub.get("websocket_endpoint")
                             if endpoint and endpoint in cast_hub.websocket_connections:
                                 # Skip if already sent to this endpoint

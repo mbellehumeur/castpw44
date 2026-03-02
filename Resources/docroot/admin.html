@@ -284,6 +284,76 @@
             background-color: #1565c0;
             color: #90caf9;
         }
+        .modal-backdrop {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.7);
+            z-index: 9999;
+        }
+        .modal-dialog {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: #3d3d3d;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+            z-index: 10000;
+            min-width: 400px;
+        }
+        .modal-dialog h3 {
+            margin-top: 0;
+            color: #e0e0e0;
+        }
+        .modal-dialog p {
+            color: #e0e0e0;
+            margin-bottom: 20px;
+        }
+        .modal-dialog label {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: #e0e0e0;
+            margin-bottom: 20px;
+            cursor: pointer;
+        }
+        .modal-dialog input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+            cursor: pointer;
+        }
+        .modal-dialog .modal-actions {
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+        }
+        .modal-dialog .modal-actions button {
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .modal-dialog .btn-cancel {
+            background-color: #4a4a4a;
+            color: #e0e0e0;
+            border: 1px solid #666;
+        }
+        .modal-dialog .btn-confirm-reset {
+            background-color: #d32f2f;
+            color: white;
+            border: 1px solid #c62828;
+        }
+        .refresh-link {
+            color: #90A4AE;
+            cursor: pointer;
+            text-decoration: underline;
+        }
+        .refresh-link:hover {
+            color: #78909C;
+        }
     </style>
 </head>
 <body>
@@ -296,12 +366,12 @@
                 <button onclick="window.open('/api/hub/logs', '_blank')" style="background-color: #90A4AE; color: white; border: 1px solid #78909C;">
                     Server logs
                 </button>
-                <button id="resetButton" onclick="resetHub()" style="opacity: 0; width: 1px; height: 1px; padding: 0; margin: 0; border: none; overflow: hidden; cursor: pointer;" title="Reset Hub">Reset</button>
             </div>
         </h1>
         
         <div class="controls">
             <span class="last-updated" id="connectionStatus">Connecting...</span>
+            <span class="last-updated" id="refreshControl" style="display: none;"><span class="refresh-link" onclick="refreshAll()" title="Refresh data">Refresh</span></span>
             <span class="last-updated" id="lastUpdated"></span>
         </div>
 
@@ -346,7 +416,8 @@
                 <select id="eventFilter">
                     <option value="">All Events</option>
                 </select>
-                <button onclick="loadAuditLog()">Filter</button>
+                <button onclick="loadAuditLog()">Apply filters</button>
+                <button onclick="clearAuditLog()">Clear message log</button>
             </div>
             <div id="auditLogTable">
                 <p>Loading message log...</p>
@@ -361,6 +432,10 @@
     </button>
 
     <script>
+        const STATUS_AUTO_HIDE_MS = 2000;
+        const MAX_RECONNECT_ATTEMPTS = 5;
+        const RECONNECT_BASE_MS = 2000;
+
         async function loadStatus() {
             const errorDiv = document.getElementById('errorMessage');
             errorDiv.innerHTML = '';
@@ -538,23 +613,20 @@
         }
         
         async function resetHub() {
-            // Create backdrop overlay
             const backdrop = document.createElement('div');
-            backdrop.style.cssText = 'position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 9999;';
-            
-            // Create custom dialog with checkbox
+            backdrop.className = 'modal-backdrop';
             const dialog = document.createElement('div');
-            dialog.style.cssText = 'position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: #3d3d3d; padding: 30px; border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.5); z-index: 10000; min-width: 400px;';
+            dialog.className = 'modal-dialog';
             dialog.innerHTML = `
-                <h3 style="margin-top: 0; color: #e0e0e0;">Reset Server</h3>
-                <p style="color: #e0e0e0; margin-bottom: 20px;">Are you sure you want to reset the hub? This will delete all subscriptions, conferences, and message log entries. This action cannot be undone.</p>
-                <label style="display: flex; align-items: center; gap: 10px; color: #e0e0e0; margin-bottom: 20px; cursor: pointer;">
-                    <input type="checkbox" id="singleUserModeCheckbox" style="width: 18px; height: 18px; cursor: pointer;">
+                <h3>Reset Server</h3>
+                <p>Are you sure you want to reset the hub? This will delete all subscriptions, conferences, and message log entries. This action cannot be undone.</p>
+                <label>
+                    <input type="checkbox" id="singleUserModeCheckbox">
                     <span>Single-user mode</span>
                 </label>
-                <div style="display: flex; gap: 10px; justify-content: flex-end;">
-                    <button id="cancelResetBtn" style="padding: 8px 16px; background-color: #4a4a4a; color: #e0e0e0; border: 1px solid #666; border-radius: 4px; cursor: pointer;">Cancel</button>
-                    <button id="confirmResetBtn" style="padding: 8px 16px; background-color: #d32f2f; color: white; border: 1px solid #c62828; border-radius: 4px; cursor: pointer;">Reset</button>
+                <div class="modal-actions">
+                    <button id="cancelResetBtn" class="btn-cancel">Cancel</button>
+                    <button id="confirmResetBtn" class="btn-confirm-reset">Reset</button>
                 </div>
             `;
             document.body.appendChild(backdrop);
@@ -600,10 +672,9 @@
                             statusDiv.innerHTML = `<div style="background-color: #2e7d32; color: #a5d6a7; padding: 12px; border-radius: 4px; border-left: 3px solid #4CAF50;">${escapeHtml(data.message || 'Server reset successfully')}</div>`;
                             // Refresh all data
                             await refreshAll();
-                            // Auto-hide after 2 seconds
                             setTimeout(() => {
                                 statusDiv.innerHTML = '';
-                            }, 2000);
+                            }, STATUS_AUTO_HIDE_MS);
                         } else {
                             const errorText = await response.text();
                             throw new Error(`Reset failed: ${response.status} - ${errorText}`);
@@ -611,10 +682,9 @@
                     } catch (error) {
                         console.error('Error resetting hub:', error);
                         statusDiv.innerHTML = `<div class="error">Error resetting hub: ${escapeHtml(error.message)}</div>`;
-                        // Auto-hide after 2 seconds
                         setTimeout(() => {
                             statusDiv.innerHTML = '';
-                        }, 2000);
+                        }, STATUS_AUTO_HIDE_MS);
                     } finally {
                         resetBtn.disabled = false;
                         resetBtn.textContent = 'Reset Server';
@@ -651,7 +721,7 @@
                     <td><span class="event-name" onclick="toggleEventDetails(${index})">${escapeHtml(entry.event_name || 'N/A')}</span></td>
                 </tr>
                 <tr>
-                    <td colspan="5">
+                    <td colspan="6">
                         <div class="event-details" id="eventDetails${index}">${escapeHtml(eventData)}</div>
                     </td>
                 </tr>`;
@@ -694,6 +764,7 @@
                 }
             }
             
+            const refreshEl = document.getElementById('refreshControl');
             if (adminWebSocket && adminWebSocket.readyState === WebSocket.OPEN) {
                 if (adminClientCount !== undefined && adminClientCount > 0) {
                     statusEl.textContent = `Connected (${adminClientCount} admin client${adminClientCount !== 1 ? 's' : ''})`;
@@ -701,19 +772,21 @@
                     statusEl.textContent = 'Connected';
                 }
                 statusEl.style.color = '#90A4AE';
+                if (refreshEl) refreshEl.style.display = 'none';
             } else if (adminWebSocket && adminWebSocket.readyState === WebSocket.CONNECTING) {
                 statusEl.textContent = 'Connecting...';
                 statusEl.style.color = '#b0b0b0';
+                if (refreshEl) refreshEl.style.display = 'inline';
             } else {
                 statusEl.textContent = 'Disconnected';
                 statusEl.style.color = '#999';
+                if (refreshEl) refreshEl.style.display = 'inline';
             }
         }
         
         // Admin WebSocket connection
         let adminWebSocket = null;
         let reconnectAttempts = 0;
-        const maxReconnectAttempts = 5;
 
         function connectAdminWebSocket() {
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -759,10 +832,10 @@
                     updateConnectionStatus();
                     
                     // Attempt to reconnect
-                    if (reconnectAttempts < maxReconnectAttempts) {
+                    if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
                         reconnectAttempts++;
-                        console.log(`Attempting to reconnect (${reconnectAttempts}/${maxReconnectAttempts})...`);
-                        setTimeout(connectAdminWebSocket, 2000 * reconnectAttempts);
+                        console.log(`Attempting to reconnect (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`);
+                        setTimeout(connectAdminWebSocket, RECONNECT_BASE_MS * reconnectAttempts);
                     } else {
                         console.error('Max reconnection attempts reached');
                         updateConnectionStatus();

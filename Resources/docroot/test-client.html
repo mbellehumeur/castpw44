@@ -743,14 +743,18 @@
                         return v.toString(16);
                     });
 
+                const eventPayload = {
+                    "hub.topic": topic,
+                    "hub.event": eventType,
+                    "context": eventData
+                };
+                if (subscriberName) {
+                    eventPayload["hub.source"] = subscriberName;
+                }
                 const payload = {
                     "timestamp": new Date().toISOString(),
                     "id": messageId,
-                    "event": {
-                        "hub.topic": topic,
-                        "hub.event": eventType,
-                        "context": eventData
-                    }
+                    "event": eventPayload
                 };
 
                 const response = await fetch(`/api/hub/${encodeURIComponent(topic)}`, {
