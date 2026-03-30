@@ -217,6 +217,15 @@ class CastHub:
         hub_secret = subscription_data.get("hub.secret", subscription_data.get("hub_secret", ""))
         hub_lease = subscription_data.get("hub.lease_seconds", subscription_data.get("hub.lease", subscription_data.get("hub_lease", "7200")))
         subscriber_name = subscription_data.get("subscriber.name", subscription_data.get("subscriber_name", "unknown"))
+        raw_sub_actors = subscription_data.get("subscriber.actor")
+        subscriber_actors = []
+        if raw_sub_actors is not None:
+            if isinstance(raw_sub_actors, list):
+                subscriber_actors = [str(x).strip() for x in raw_sub_actors if str(x).strip()]
+            else:
+                s = str(raw_sub_actors).strip()
+                if s:
+                    subscriber_actors = [s]
         channel_type = subscription_data.get("hub.channel.type", subscription_data.get("hub_channel_type", "websub"))
         channel_endpoint = subscription_data.get("hub.channel.endpoint", subscription_data.get("hub_channel_endpoint", ""))
         host = subscription_data.get("host", subscription_data.get("Host", ""))
@@ -264,6 +273,7 @@ class CastHub:
                 "lease": int(hub_lease),
                 "session": hub_topic,
                 "subscriber": subscriber_name,
+                "actors": subscriber_actors,
                 "host": host,
                 "created": datetime.now().isoformat()
             }
@@ -542,7 +552,11 @@ async def _parse_request_body(request: Request) -> dict:
         return await request.json()
     try:
         form_data = await request.form()
-        return dict(form_data)
+        merged = {}
+        for key in form_data.keys():
+            values = form_data.getlist(key)
+            merged[key] = values[0] if len(values) == 1 else values
+        return merged
     except AssertionError as e:
         if "python-multipart" in str(e):
             body = await request.body()
@@ -867,7 +881,15 @@ async def get_cast_subscriber(request: Request):
     """Check if a subscriber exists and is connected"""
     subscriber = request.query_params.get("subscriber", "").strip()
     data_type = request.query_params.get("dataType", "").strip()
-    
+    topic_param = request.query_params.get("topic", "").strip()
+    actor_param = request.query_params.get("actor", "").strip()
+    actor_value = None
+    if actor_param:
+        try:
+            actor_value = json.loads(actor_param)
+        except json.JSONDecodeError:
+            actor_value = actor_param
+
     if not subscriber:
         raise HTTPException(status_code=400, detail="Missing 'subscriber' parameter")
     
@@ -878,15 +900,18 @@ async def get_cast_subscriber(request: Request):
         if response_data is None:
             response_data = {"error": "No sceneview data found", "folder": sceneview_folder}
         cast_hub.log(f"Loaded sceneview for subscriber 3DSLICER from {sceneview_folder}")
-        return {
+        out_3d = {
             "subscriber": subscriber,
             "dataType": data_type if data_type else None,
             "exists": True,
             "connected": False,
-            "topic": None,
+            "topic": topic_param if topic_param else None,
             "endpoint": None,
             "response": response_data,
         }
+        if actor_value is not None:
+            out_3d["actor"] = actor_value
+        return out_3d
     
     # Check if subscriber has a subscription
     subscriber_exists = False
@@ -895,15 +920,18 @@ async def get_cast_subscriber(request: Request):
     
     for sub in cast_hub.get_subscriptions():
         sub_name = sub.get("subscriber", "").strip()
-        if sub_name == subscriber:
-            subscriber_exists = True
-            subscription_info = sub
-            
-            # Check if they have an active WebSocket connection
-            websocket_endpoint = sub.get("websocket_endpoint")
-            if websocket_endpoint and websocket_endpoint in cast_hub.websocket_connections:
-                subscriber_connected = True
-            break
+        if sub_name != subscriber:
+            continue
+        if topic_param and sub.get("topic", "").strip() != topic_param:
+            continue
+        subscriber_exists = True
+        subscription_info = sub
+
+        # Check if they have an active WebSocket connection
+        websocket_endpoint = sub.get("websocket_endpoint")
+        if websocket_endpoint and websocket_endpoint in cast_hub.websocket_connections:
+            subscriber_connected = True
+        break
     
     # If subscriber exists and is connected, send message and wait for response
     response_data = None
@@ -935,6 +963,8 @@ async def get_cast_subscriber(request: Request):
                         }
                     }
                 }
+                if actor_value is not None:
+                    notification["actor"] = actor_value
                 message_json = json.dumps(notification)
                 
                 await websocket.send_text(message_json)
@@ -960,15 +990,20 @@ async def get_cast_subscriber(request: Request):
                 if request_id and request_id in cast_hub.pending_get_requests:
                     del cast_hub.pending_get_requests[request_id]
     
-    return {
+    out = {
         "subscriber": subscriber,
         "dataType": data_type if data_type else None,
         "exists": subscriber_exists,
         "connected": subscriber_connected,
         "topic": subscription_info.get("topic") if subscription_info else None,
         "endpoint": subscription_info.get("websocket_endpoint") if subscription_info else None,
-        "response": response_data
+        "response": response_data,
     }
+    if topic_param:
+        out["requestedTopic"] = topic_param
+    if actor_value is not None:
+        out["actor"] = actor_value
+    return out
 
 
 @app.get("/api/hub/{topic}")
@@ -991,30 +1026,201 @@ async def get_hub_topic(topic: str, request: Request):
         return context
 
 
+async def _handle_publish_notification(notification: dict, path_topic: str = ""):
+    """Handle publish notification payload and broadcast to subscribers."""
+    message_id = notification.get("id", "unknown")
+    event = notification.get("event", {})
+    event_type = event.get("hub.event", "unknown")
+    topic_name = event.get("hub.topic", "").strip()
+
+    if not topic_name:
+        topic_name = (path_topic or "").strip()
+        if not topic_name:
+            raise HTTPException(status_code=400, detail="Missing event.hub.topic for publish request")
+        # Keep event payload canonical for downstream logic/audit.
+        event["hub.topic"] = topic_name
+        notification["event"] = event
+
+    cast_hub.log(f"Received cast message ID: {message_id} for topic {topic_name}, event: {event_type}")
+
+    # Broadcast to subscribers (sync method, but WebSocket sending needs async)
+    context = event.get("context", {})
+    
+    # Update lastContext
+    if "close" in event_type.lower():
+        cast_hub.last_context[topic_name] = {}
+    else:
+        if context:
+            cast_hub.last_context[topic_name] = context
+    
+    # Add to audit log - mark as received
+    # Extract user from subscriptions that match this topic
+    user = "unknown"
+    for sub in cast_hub.subscriptions:
+        if sub.get("topic") == topic_name:
+            user = sub.get("subscriber", "unknown")
+            break
+    # If no subscription found, try to extract from topic name
+    if user == "unknown":
+        user = topic_name if topic_name.startswith("user-") else topic_name
+    cast_hub.add_audit_log(user=user, topic=topic_name, event_name=event_type, event_data=context, direction="received")
+    
+    # Calculate HMAC signature
+    notification_json = json.dumps(notification)
+    
+    # Publisher subscriber to suppress echo (from hub.source in event)
+    publisher_subscriber = event.get("hub.source", "").strip() or None
+    
+    # Track endpoints that have already received the message to prevent duplicates
+    sent_endpoints = set()
+    
+    # Send to matching subscriptions
+    for sub in cast_hub.subscriptions[:]:  # Copy to allow removal
+        # Check if subscription matches
+        subscribed_events = sub.get("events", "").lower()
+        if topic_name != sub.get("topic", ""):
+            continue
+        if event_type.lower() not in subscribed_events and "*" not in subscribed_events:
+            continue
+        
+        secret = sub.get("secret", "")
+        channel = sub.get("channel", "websub")
+        
+        # Calculate HMAC
+        hmac_sig = ""
+        if secret:
+            hmac_sig = hmac.new(secret.encode(), notification_json.encode(), hashlib.sha256).hexdigest()
+        
+        if channel == "websocket":
+            # Skip publisher (suppress echo) when hub.source matches
+            if publisher_subscriber and sub.get("subscriber") == publisher_subscriber:
+                continue
+            # WebSocket delivery - async
+            endpoint = sub.get("websocket_endpoint")
+            if endpoint and endpoint in cast_hub.websocket_connections:
+                try:
+                    websocket = cast_hub.websocket_connections[endpoint]
+                    # FastAPI WebSocket.send_text() is async - await it
+                    await websocket.send_text(notification_json)
+                    cast_hub.log(f"Sent WebSocket message to {sub.get('subscriber')} via endpoint {endpoint}")
+                    # Track this endpoint as having received the message
+                    sent_endpoints.add(endpoint)
+                    # Log sent message
+                    cast_hub.add_audit_log(
+                        user=sub.get("subscriber", "unknown"),
+                        topic=topic_name,
+                        event_name=event_type,
+                        event_data=context,
+                        direction="sent"
+                    )
+                except Exception as e:
+                    cast_hub.log(f"WebSocket send error for {endpoint}: {type(e).__name__}: {e}")
+                    cast_hub.log(f"Removing failed WebSocket connection and subscription")
+                    if endpoint in cast_hub.websocket_connections:
+                        del cast_hub.websocket_connections[endpoint]
+                    if sub in cast_hub.subscriptions:
+                        cast_hub.subscriptions.remove(sub)
+            else:
+                if not endpoint:
+                    cast_hub.log(f"WebSocket endpoint not set for subscription: {sub.get('subscriber')}")
+                else:
+                    cast_hub.log(f"WebSocket not bound for subscription: {sub.get('subscriber')}")
+        else:
+            # Skip publisher (suppress echo) when hub.source matches
+            if publisher_subscriber and sub.get("subscriber") == publisher_subscriber:
+                continue
+            # WebSub delivery - HTTP POST to callback (can be async but using sync for now)
+            callback = sub.get("callback")
+            if callback:
+                try:
+                    req = urllib.request.Request(callback)
+                    req.add_header("Content-Type", "application/json")
+                    req.add_header("X-Hub-Signature", f"sha256={hmac_sig}")
+                    req.data = notification_json.encode()
+                    req.get_method = lambda: "POST"
+                    
+                    loop = asyncio.get_event_loop()
+                    await loop.run_in_executor(None, lambda: urllib.request.urlopen(req, timeout=5))
+                    cast_hub.log(f"Sent WebSub notification to {callback}")
+                    # Log sent message
+                    cast_hub.add_audit_log(
+                        user=sub.get("subscriber", "unknown"),
+                        topic=topic_name,
+                        event_name=event_type,
+                        event_data=context,
+                        direction="sent"
+                    )
+                except Exception as e:
+                    cast_hub.log(f"WebSub delivery error to {callback}: {e}")
+    
+    # Handle conferences - broadcast to attendees (skip if already sent)
+    for conference in cast_hub.conferences:
+        conference_user = conference.get("user")
+        attendee_topics = conference.get("topics", [])
+        
+        # Check if message is from any conference participant (host or attendee)
+        is_participant = (conference_user == topic_name) or (topic_name in attendee_topics)
+        
+        if is_participant:
+            # Send to all participants (host + all attendees)
+            all_participants = [conference_user] + attendee_topics
+            
+            for participant_topic in all_participants:
+                # Find subscriptions for participant
+                for sub in cast_hub.subscriptions:
+                    if sub.get("topic") == participant_topic and sub.get("channel") == "websocket":
+                        # Skip publisher (suppress echo) when hub.source matches
+                        if publisher_subscriber and sub.get("subscriber") == publisher_subscriber:
+                            continue
+                        endpoint = sub.get("websocket_endpoint")
+                        if endpoint and endpoint in cast_hub.websocket_connections:
+                            # Skip if already sent to this endpoint
+                            if endpoint in sent_endpoints:
+                                continue
+                            try:
+                                websocket = cast_hub.websocket_connections[endpoint]
+                                await websocket.send_text(notification_json)
+                                cast_hub.log(f"Sent conference message to participant: {participant_topic}")
+                                # Track this endpoint as having received the message
+                                sent_endpoints.add(endpoint)
+                                # Log sent conference message
+                                cast_hub.add_audit_log(
+                                    user=sub.get("subscriber", "unknown"),
+                                    topic=participant_topic,
+                                    event_name=event_type,
+                                    event_data=context,
+                                    direction="sent"
+                                )
+                            except Exception as e:
+                                cast_hub.log(f"Conference WebSocket error: {e}")
+
+    return {"status": "received"}
+
+
 @app.post("/api/hub/")
 @app.post("/api/hub")
 async def post_hub(request: Request):
-    """Handle subscription requests"""
+    """Handle subscribe/unsubscribe and publish requests."""
     try:
-        subscription_data = await _parse_request_body(request)
+        request_data = await _parse_request_body(request)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Could not parse request: {e}")
     
     # Also get query parameters
     query_params = dict(request.query_params)
-    subscription_data.update(query_params)
+    request_data.update(query_params)
     
     # Add host header for WebSocket URL generation
-    subscription_data["host"] = request.headers.get("host", request.headers.get("Host", ""))
+    request_data["host"] = request.headers.get("host", request.headers.get("Host", ""))
     
     try:
-        hub_mode = subscription_data.get("hub.mode", subscription_data.get("hub_mode", "subscribe"))
-        
-        if hub_mode == "unsubscribe":
-            # Handle unsubscribe
-            result = cast_hub.add_subscription(subscription_data)
-            return {"status": "unsubscribed", "removed": result.get("removed", 0)}
-        else:
+        hub_mode = request_data.get("hub.mode", request_data.get("hub_mode", "")).strip().lower()
+        if hub_mode == "subscribe" or hub_mode == "unsubscribe":
+            subscription_data = request_data
+            if hub_mode == "unsubscribe":
+                # Handle unsubscribe
+                result = cast_hub.add_subscription(subscription_data)
+                return {"status": "unsubscribed", "removed": result.get("removed", 0)}
             # Handle subscribe
             result = cast_hub.add_subscription(subscription_data)
             
@@ -1024,11 +1230,22 @@ async def post_hub(request: Request):
                     content={"hub.channel.endpoint": result["websocket_url"]},
                     status_code=202
                 )
-            else:
-                return JSONResponse(
-                    content={"status": "subscribed", "subscription": result["subscription"]},
-                    status_code=202
-                )
+            return JSONResponse(
+                content={"status": "subscribed", "subscription": result["subscription"]},
+                status_code=202
+            )
+
+        # Publish via /api/hub or /api/hub/
+        event = request_data.get("event")
+        if isinstance(event, dict):
+            return await _handle_publish_notification(request_data)
+
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid /api/hub POST payload: expected hub.mode for subscribe/unsubscribe or event payload for publish"
+        )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
     finally:
@@ -1041,164 +1258,9 @@ async def post_hub_topic(topic: str, request: Request):
     """Handle POST /api/hub/{topic} - receive events and broadcast to subscribers"""
     try:
         notification = await request.json()
-        message_id = notification.get("id", "unknown")
-        event = notification.get("event", {})
-        event_type = event.get("hub.event", "unknown")
-        cast_hub.log(f"Received cast message ID: {message_id} for topic {topic}, event: {event_type}")
-        
-        # Broadcast to subscribers (sync method, but WebSocket sending needs async)
-        topic_name = event.get("hub.topic", "")
-        context = event.get("context", {})
-        
-        # Update lastContext
-        if "close" in event_type.lower():
-            cast_hub.last_context[topic_name] = {}
-        else:
-            if context:
-                cast_hub.last_context[topic_name] = context
-        
-        # Add to audit log - mark as received
-        # Extract user from subscriptions that match this topic
-        user = "unknown"
-        for sub in cast_hub.subscriptions:
-            if sub.get("topic") == topic_name:
-                user = sub.get("subscriber", "unknown")
-                break
-        # If no subscription found, try to extract from topic name
-        if user == "unknown":
-            user = topic_name if topic_name.startswith("user-") else topic_name
-        cast_hub.add_audit_log(user=user, topic=topic_name, event_name=event_type, event_data=context, direction="received")
-        
-        # Calculate HMAC signature
-        notification_json = json.dumps(notification)
-        
-        # Publisher subscriber to suppress echo (from hub.source in event)
-        publisher_subscriber = event.get("hub.source", "").strip() or None
-        
-        # Track endpoints that have already received the message to prevent duplicates
-        sent_endpoints = set()
-        
-        # Send to matching subscriptions
-        for sub in cast_hub.subscriptions[:]:  # Copy to allow removal
-            # Check if subscription matches
-            subscribed_events = sub.get("events", "").lower()
-            if topic_name != sub.get("topic", ""):
-                continue
-            if event_type.lower() not in subscribed_events and "*" not in subscribed_events:
-                continue
-            
-            secret = sub.get("secret", "")
-            channel = sub.get("channel", "websub")
-            
-            # Calculate HMAC
-            hmac_sig = ""
-            if secret:
-                hmac_sig = hmac.new(secret.encode(), notification_json.encode(), hashlib.sha256).hexdigest()
-            
-            if channel == "websocket":
-                # Skip publisher (suppress echo) when hub.source matches
-                if publisher_subscriber and sub.get("subscriber") == publisher_subscriber:
-                    continue
-                # WebSocket delivery - async
-                endpoint = sub.get("websocket_endpoint")
-                if endpoint and endpoint in cast_hub.websocket_connections:
-                    try:
-                        websocket = cast_hub.websocket_connections[endpoint]
-                        # FastAPI WebSocket.send_text() is async - await it
-                        await websocket.send_text(notification_json)
-                        cast_hub.log(f"Sent WebSocket message to {sub.get('subscriber')} via endpoint {endpoint}")
-                        # Track this endpoint as having received the message
-                        sent_endpoints.add(endpoint)
-                        # Log sent message
-                        cast_hub.add_audit_log(
-                            user=sub.get("subscriber", "unknown"),
-                            topic=topic_name,
-                            event_name=event_type,
-                            event_data=context,
-                            direction="sent"
-                        )
-                    except Exception as e:
-                        cast_hub.log(f"WebSocket send error for {endpoint}: {type(e).__name__}: {e}")
-                        cast_hub.log(f"Removing failed WebSocket connection and subscription")
-                        if endpoint in cast_hub.websocket_connections:
-                            del cast_hub.websocket_connections[endpoint]
-                        if sub in cast_hub.subscriptions:
-                            cast_hub.subscriptions.remove(sub)
-                else:
-                    if not endpoint:
-                        cast_hub.log(f"WebSocket endpoint not set for subscription: {sub.get('subscriber')}")
-                    else:
-                        cast_hub.log(f"WebSocket not bound for subscription: {sub.get('subscriber')}")
-            else:
-                # Skip publisher (suppress echo) when hub.source matches
-                if publisher_subscriber and sub.get("subscriber") == publisher_subscriber:
-                    continue
-                # WebSub delivery - HTTP POST to callback (can be async but using sync for now)
-                callback = sub.get("callback")
-                if callback:
-                    try:
-                        req = urllib.request.Request(callback)
-                        req.add_header("Content-Type", "application/json")
-                        req.add_header("X-Hub-Signature", f"sha256={hmac_sig}")
-                        req.data = notification_json.encode()
-                        req.get_method = lambda: "POST"
-                        
-                        loop = asyncio.get_event_loop()
-                        await loop.run_in_executor(None, lambda: urllib.request.urlopen(req, timeout=5))
-                        cast_hub.log(f"Sent WebSub notification to {callback}")
-                        # Log sent message
-                        cast_hub.add_audit_log(
-                            user=sub.get("subscriber", "unknown"),
-                            topic=topic_name,
-                            event_name=event_type,
-                            event_data=context,
-                            direction="sent"
-                        )
-                    except Exception as e:
-                        cast_hub.log(f"WebSub delivery error to {callback}: {e}")
-        
-        # Handle conferences - broadcast to attendees (skip if already sent)
-        for conference in cast_hub.conferences:
-            conference_user = conference.get("user")
-            attendee_topics = conference.get("topics", [])
-            
-            # Check if message is from any conference participant (host or attendee)
-            is_participant = (conference_user == topic_name) or (topic_name in attendee_topics)
-            
-            if is_participant:
-                # Send to all participants (host + all attendees)
-                all_participants = [conference_user] + attendee_topics
-                
-                for participant_topic in all_participants:
-                    # Find subscriptions for participant
-                    for sub in cast_hub.subscriptions:
-                        if sub.get("topic") == participant_topic and sub.get("channel") == "websocket":
-                            # Skip publisher (suppress echo) when hub.source matches
-                            if publisher_subscriber and sub.get("subscriber") == publisher_subscriber:
-                                continue
-                            endpoint = sub.get("websocket_endpoint")
-                            if endpoint and endpoint in cast_hub.websocket_connections:
-                                # Skip if already sent to this endpoint
-                                if endpoint in sent_endpoints:
-                                    continue
-                                try:
-                                    websocket = cast_hub.websocket_connections[endpoint]
-                                    await websocket.send_text(notification_json)
-                                    cast_hub.log(f"Sent conference message to participant: {participant_topic}")
-                                    # Track this endpoint as having received the message
-                                    sent_endpoints.add(endpoint)
-                                    # Log sent conference message
-                                    cast_hub.add_audit_log(
-                                        user=sub.get("subscriber", "unknown"),
-                                        topic=participant_topic,
-                                        event_name=event_type,
-                                        event_data=context,
-                                        direction="sent"
-                                    )
-                                except Exception as e:
-                                    cast_hub.log(f"Conference WebSocket error: {e}")
-        
-        return {"status": "received"}
+        return await _handle_publish_notification(notification, path_topic=topic)
+    except HTTPException:
+        raise
     except Exception as e:
         cast_hub.log(f"Error handling event: {e}")
         raise HTTPException(status_code=400, detail=str(e))
