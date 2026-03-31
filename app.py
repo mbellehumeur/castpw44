@@ -217,12 +217,24 @@ class CastHub:
         hub_secret = subscription_data.get("hub.secret", subscription_data.get("hub_secret", ""))
         hub_lease = subscription_data.get("hub.lease_seconds", subscription_data.get("hub.lease", subscription_data.get("hub_lease", "7200")))
         subscriber_name = subscription_data.get("subscriber.name", subscription_data.get("subscriber_name", "unknown"))
-        raw_sub_actors = subscription_data.get("subscriber.actor")
+        raw_sub_actors = subscription_data.get("subscriber.actors")
         subscriber_actors = []
         if raw_sub_actors is not None:
-            if isinstance(raw_sub_actors, list):
-                subscriber_actors = [str(x).strip() for x in raw_sub_actors if str(x).strip()]
-            else:
+            try:
+                parsed_sub_actors = (
+                    json.loads(raw_sub_actors)
+                    if isinstance(raw_sub_actors, str)
+                    else raw_sub_actors
+                )
+                if isinstance(parsed_sub_actors, list):
+                    subscriber_actors = [
+                        str(x).strip() for x in parsed_sub_actors if str(x).strip()
+                    ]
+                elif isinstance(parsed_sub_actors, str):
+                    s = parsed_sub_actors.strip()
+                    if s:
+                        subscriber_actors = [s]
+            except (json.JSONDecodeError, TypeError):
                 s = str(raw_sub_actors).strip()
                 if s:
                     subscriber_actors = [s]
