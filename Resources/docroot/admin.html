@@ -136,11 +136,21 @@
             background-color: #5d4037;
             color: #ffb74d;
         }
-        .endpoint {
-            font-family: monospace;
-            font-size: 12px;
-            color: #66b3ff;
-            word-break: break-all;
+        .msg-counts {
+            font-size: 13px;
+            white-space: nowrap;
+        }
+        .msg-counts .msg-rx {
+            color: #a5d6a7;
+            font-weight: 600;
+        }
+        .msg-counts .msg-tx {
+            color: #90caf9;
+            font-weight: 600;
+        }
+        .msg-counts .msg-sep {
+            color: #888;
+            margin: 0 6px;
         }
         .topic {
             font-weight: 500;
@@ -154,6 +164,16 @@
         #subscriptionsTable table th:nth-child(2),
         #subscriptionsTable table td:nth-child(2) {
             min-width: 120px;
+        }
+        #subscriptionsTable table th:nth-child(3),
+        #subscriptionsTable table td:nth-child(3) {
+            min-width: 130px;
+        }
+        #subscriptionsTable table th:nth-child(5),
+        #subscriptionsTable table td:nth-child(5) {
+            min-width: 100px;
+            max-width: 280px;
+            word-break: break-word;
         }
         .no-subscriptions {
             text-align: center;
@@ -264,6 +284,14 @@
         }
         .event-details.show {
             display: block;
+        }
+        tr.audit-row-received {
+            cursor: help;
+        }
+        .duplicate-badge {
+            color: #888;
+            font-size: 11px;
+            font-weight: normal;
         }
         .timestamp {
             color: #b0b0b0;
@@ -462,17 +490,16 @@
                 
                 const tableDiv = document.getElementById('subscriptionsTable');
                 if (data.subscriptions && data.subscriptions.length > 0) {
-                    let tableHTML = '<table><thead><tr><th>Subscriber</th><th>Topic</th><th>Channel</th><th>Endpoint</th><th>Events</th><th>Created</th></tr></thead><tbody>';
+                    let tableHTML = '<table><thead><tr><th>Subscriber</th><th>Topic</th><th title="Per subscriber name (not per topic): published = deliveries to this subscriber; Rcvd = matching inbound events attributed to this subscriber">Published/Rcvd</th><th>Events</th><th>Actors</th><th>Created</th></tr></thead><tbody>';
                     
                     data.subscriptions.forEach(sub => {
-                        const channelClass = sub.channel === 'websocket' ? 'channel-websocket' : 'channel-websub';
                         tableHTML += `
                             <tr>
                                 <td>${escapeHtml(sub.subscriber || 'unknown')}</td>
                                 <td class="topic">${escapeHtml(sub.topic || 'unknown')}</td>
-                                <td><span class="channel ${channelClass}">${escapeHtml(sub.channel || 'websub')}</span></td>
-                                <td class="endpoint">${escapeHtml(sub.endpoint || 'N/A')}</td>
+                                <td>${formatSubscriptionMessageCounts(sub)}</td>
                                 <td>${escapeHtml(sub.events || 'all')}</td>
+                                <td>${formatSubscriptionActors(sub)}</td>
                                 <td>${escapeHtml(sub.created || 'unknown')}</td>
                             </tr>
                         `;
@@ -695,38 +722,109 @@
             });
         }
         
+        function escapeAttr(text) {
+            return String(text)
+                .replace(/&/g, '&amp;')
+                .replace(/"/g, '&quot;')
+                .replace(/</g, '&lt;');
+        }
+
+        function findDeliveryRecipientsInWindow(allEntries, topic, eventName, tStart, tEnd) {
+            const names = new Set();
+            for (const e of allEntries) {
+                if (e.direction !== 'sent') {
+                    continue;
+                }
+                if ((e.topic || '') !== topic || (e.event_name || '') !== eventName) {
+                    continue;
+                }
+                const t = new Date(e.timestamp).getTime();
+                if (!Number.isFinite(t) || t < tStart || t > tEnd) {
+                    continue;
+                }
+                const u = (e.user || '').trim();
+                if (u) {
+                    names.add(u);
+                }
+            }
+            return Array.from(names).sort((a, b) => a.localeCompare(b));
+        }
+
+        function buildReceivedLogRows(allEntries) {
+            const received = allEntries.filter(e => (e.direction || 'received') === 'received');
+            const byKey = new Map();
+            for (const e of received) {
+                const raw = e.timestamp || '';
+                const toSec = raw.slice(0, 19);
+                const key = `${e.topic || ''}\u0000${e.event_name || ''}\u0000${toSec}`;
+                if (!byKey.has(key)) {
+                    byKey.set(key, []);
+                }
+                byKey.get(key).push(e);
+            }
+            const rows = [];
+            for (const [, group] of byKey) {
+                group.sort((a, b) => (a.message_number || 0) - (b.message_number || 0));
+                const rep = group[0];
+                const times = group.map(x => new Date(x.timestamp).getTime()).filter(Number.isFinite);
+                const tMin = times.length ? Math.min(...times) : new Date(rep.timestamp).getTime();
+                const tMax = times.length ? Math.max(...times) : tMin;
+                const recipientList = findDeliveryRecipientsInWindow(
+                    allEntries,
+                    rep.topic || '',
+                    rep.event_name || '',
+                    tMin - 1500,
+                    tMax + 3500
+                );
+                rows.push({ rep, recipientList, duplicateCount: group.length });
+            }
+            rows.sort((a, b) => new Date(a.rep.timestamp) - new Date(b.rep.timestamp));
+            return rows;
+        }
+
         function displayAuditLog(entries) {
             const tableDiv = document.getElementById('auditLogTable');
-            
-            if (entries.length === 0) {
+            const allEntries = Array.isArray(entries) ? entries : [];
+            const displayRows = buildReceivedLogRows(allEntries);
+
+            if (displayRows.length === 0) {
                 tableDiv.innerHTML = '<div class="no-subscriptions">No message log entries found</div>';
                 return;
             }
-            
-            let html = '<table><thead><tr><th>#</th><th>Timestamp</th><th>Direction</th><th>Subscriber</th><th>Topic</th><th>Event Name</th></tr></thead><tbody>';
-            
-            entries.forEach((entry, index) => {
-                const date = new Date(entry.timestamp);
-                const timestamp = date.toLocaleString() + '.' + date.getMilliseconds().toString().padStart(3, '0');
-                const direction = entry.direction || 'received';
-                const eventData = JSON.stringify(entry.event_data, null, 2);
-                const msgNum = entry.message_number || '-';
-                
-                html += `<tr>
-                    <td>${escapeHtml(msgNum.toString())}</td>
-                    <td class="timestamp">${escapeHtml(timestamp)}</td>
-                    <td><span class="direction direction-${direction}">${escapeHtml(direction)}</span></td>
-                    <td>${escapeHtml(entry.user || 'N/A')}</td>
-                    <td class="topic">${escapeHtml(entry.topic || 'N/A')}</td>
-                    <td><span class="event-name" onclick="toggleEventDetails(${index})">${escapeHtml(entry.event_name || 'N/A')}</span></td>
+
+            let html =
+                '<table><thead><tr><th>Timestamp</th><th>Event Name</th><th>Subscriber</th><th>Topic</th></tr></thead><tbody>';
+
+            displayRows.forEach((row, index) => {
+                const { rep, recipientList, duplicateCount } = row;
+                const date = new Date(rep.timestamp);
+                const timestamp =
+                    date.toLocaleString() + '.' + date.getMilliseconds().toString().padStart(3, '0');
+                const eventData = JSON.stringify(rep.event_data, null, 2);
+                const msgNum = rep.message_number || '-';
+                const hoverText =
+                    recipientList.length > 0
+                        ? 'Subscribers that received this message: ' + recipientList.join(', ')
+                        : 'No matching outbound deliveries in the log for this event';
+                const subCell =
+                    duplicateCount > 1
+                        ? `${escapeHtml(rep.user || 'N/A')} <span class="duplicate-badge">(+${duplicateCount - 1} same event)</span>`
+                        : escapeHtml(rep.user || 'N/A');
+
+                html += `<tr class="audit-row-received" title="${escapeAttr(hoverText)}">
+                     <td class="timestamp">${escapeHtml(timestamp)}</td>
+                    <td><span class="event-name" onclick="toggleEventDetails(${index})">${escapeHtml(rep.event_name || 'N/A')}</span></td>
+                    <td>${subCell}</td>
+                    <td class="topic">${escapeHtml(rep.topic || 'N/A')}</td>
+
                 </tr>
                 <tr>
-                    <td colspan="6">
+                    <td colspan="5">
                         <div class="event-details" id="eventDetails${index}">${escapeHtml(eventData)}</div>
                     </td>
                 </tr>`;
             });
-            
+
             html += '</tbody></table>';
             tableDiv.innerHTML = html;
         }
@@ -740,6 +838,37 @@
             const div = document.createElement('div');
             div.textContent = text;
             return div.innerHTML;
+        }
+
+        /** published / received from status API; totals are by subscriber name only. */
+        function formatSubscriptionMessageCounts(sub) {
+            const published = Number(sub.published ?? sub.messages_sent) || 0;
+            const received = Number(sub.received ?? sub.messages_received) || 0;
+            return `<span class="msg-counts"><span class="msg-tx" title="Delivered to this subscriber (all subscriptions with this name)">${published}</span><span class="msg-sep">/</span><span class="msg-rx" title="Inbound events matching this subscriber subscriptions (all topics)">${received}</span></span>`;
+        }
+
+        /** Actors column: array from hub, or JSON string, or plain string. */
+        function formatSubscriptionActors(sub) {
+            let actors = sub.actors;
+            if (actors == null || actors === '') {
+                return '\u2014';
+            }
+            if (typeof actors === 'string') {
+                try {
+                    const parsed = JSON.parse(actors);
+                    if (Array.isArray(parsed) && parsed.length > 0) {
+                        return parsed.map(a => escapeHtml(String(a))).join(', ');
+                    }
+                } catch (e) {
+                    /* not JSON */
+                }
+                const s = actors.trim();
+                return s ? escapeHtml(s) : '\u2014';
+            }
+            if (Array.isArray(actors) && actors.length > 0) {
+                return actors.map(a => escapeHtml(String(a))).join(', ');
+            }
+            return '\u2014';
         }
         
         function refreshAll() {

@@ -24,6 +24,8 @@ import json
 import uuid
 import time
 import asyncio
+import base64
+import copy
 import socket
 import urllib.parse
 import urllib.request
@@ -110,6 +112,15 @@ base_dir = os.path.dirname(os.path.abspath(__file__))
 static_dir = os.path.join(base_dir, "Resources", "docroot")
 if os.path.exists(static_dir):
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
+
+def _subscription_handles_event(sub: Dict, topic_name: str, event_type: str) -> bool:
+    """Topic plus event filter — same eligibility as delivery (before channel / echo checks)."""
+    if topic_name != sub.get("topic", ""):
+        return False
+    subscribed_events = (sub.get("events") or "").lower()
+    et = event_type.lower()
+    return et in subscribed_events or "*" in subscribed_events
 
 
 class CastHub:
@@ -500,6 +511,23 @@ class CastHub:
         """Clear all entries from the audit log"""
         self.audit_log.clear()
         self.log("Audit log cleared")
+
+    def count_messages_for_subscriber(self, subscriber: str) -> Dict[str, int]:
+        """Count audit rows for this subscriber (user field only; topic on the row is ignored)."""
+        received = 0
+        sent = 0
+        key = (subscriber or "").strip()
+        if not key:
+            return {"received": 0, "sent": 0}
+        for entry in self.audit_log:
+            if (entry.get("user") or "").strip() != key:
+                continue
+            direction = entry.get("direction", "")
+            if direction == "received":
+                received += 1
+            elif direction == "sent":
+                sent += 1
+        return {"received": received, "sent": sent}
     
     async def reset_all(self):
         """Reset everything - clear subscriptions, conferences, and audit log (like restarting the service)"""
@@ -766,7 +794,18 @@ async def get_logs_viewer():
 async def get_hub_status_json():
     """Get hub status as JSON"""
     subscriptions = cast_hub.get_subscriptions()
-    
+    count_by_subscriber: Dict[str, Dict[str, int]] = {}
+    subscriptions_with_counts = []
+    for sub in subscriptions:
+        row = dict(sub)
+        key = (sub.get("subscriber") or "").strip()
+        if key not in count_by_subscriber:
+            count_by_subscriber[key] = cast_hub.count_messages_for_subscriber(key)
+        c = count_by_subscriber[key]
+        row["published"] = c["sent"]
+        row["received"] = c["received"]
+        subscriptions_with_counts.append(row)
+
     return {
         "total_subscriptions": len(subscriptions),
         "total_websockets": len(cast_hub.websocket_connections),
@@ -774,7 +813,7 @@ async def get_hub_status_json():
         "total_messages": len(cast_hub.audit_log),
         "total_admin_clients": len(cast_hub.admin_websockets),
         "single_user_mode": cast_hub.single_user_mode,
-        "subscriptions": subscriptions,
+        "subscriptions": subscriptions_with_counts,
         "websocket_endpoints": list(cast_hub.websocket_connections.keys()),
         "topics": list(set(sub.get("topic") for sub in subscriptions if sub.get("topic")))
     }
@@ -1018,6 +1057,44 @@ async def get_cast_subscriber(request: Request):
     return out
 
 
+def _dicom_send_websocket_frames(notification: dict, notification_json: str) -> tuple:
+    """
+    WebSocket subscribers receive dicom-send as: (1) JSON without embedded base64 payload,
+    with resource.binaryTransfer=True and resource.byteLength set; (2) raw DICOM bytes.
+    WebSub subscribers still receive the full JSON (notification_json) with base64 data.
+    """
+    event = notification.get("event") or {}
+    if event.get("hub.event") != "dicom-send":
+        return notification_json, None
+
+    n2 = copy.deepcopy(notification)
+    ev2 = n2.get("event") or {}
+    ctx = ev2.get("context")
+    items = ctx if isinstance(ctx, list) else ([ctx] if ctx is not None else [])
+
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        res = item.get("resource")
+        if not isinstance(res, dict):
+            continue
+        data = res.get("data")
+        if not isinstance(data, str) or not data:
+            continue
+        try:
+            raw = base64.b64decode(data)
+        except Exception:
+            return notification_json, None
+        stripped = copy.deepcopy(res)
+        stripped.pop("data", None)
+        stripped["binaryTransfer"] = True
+        stripped["byteLength"] = len(raw)
+        item["resource"] = stripped
+        return json.dumps(n2), raw
+
+    return notification_json, None
+
+
 @app.get("/api/hub/{topic}")
 async def get_hub_topic(topic: str, request: Request):
     """Get hub topic information or authenticate"""
@@ -1057,28 +1134,51 @@ async def _handle_publish_notification(notification: dict, path_topic: str = "")
 
     # Broadcast to subscribers (sync method, but WebSocket sending needs async)
     context = event.get("context", {})
-    
+
+    # Full JSON for HMAC + WebSub; WebSocket may use stripped JSON + binary body for dicom-send
+    notification_json = json.dumps(notification)
+    ws_text, ws_binary = _dicom_send_websocket_frames(notification, notification_json)
+
+    def _audit_context():
+        if event_type == "dicom-send" and ws_binary is not None:
+            try:
+                return json.loads(ws_text).get("event", {}).get("context", context)
+            except Exception:
+                return {"hub.event": "dicom-send", "binaryTransfer": True}
+        return context
+
+    audit_ctx = _audit_context()
+
     # Update lastContext
     if "close" in event_type.lower():
         cast_hub.last_context[topic_name] = {}
     else:
         if context:
-            cast_hub.last_context[topic_name] = context
-    
-    # Add to audit log - mark as received
-    # Extract user from subscriptions that match this topic
-    user = "unknown"
-    for sub in cast_hub.subscriptions:
-        if sub.get("topic") == topic_name:
-            user = sub.get("subscriber", "unknown")
-            break
-    # If no subscription found, try to extract from topic name
-    if user == "unknown":
+            if event_type == "dicom-send" and ws_binary is not None:
+                cast_hub.last_context[topic_name] = audit_ctx
+            else:
+                cast_hub.last_context[topic_name] = context
+
+    # Audit: one "received" per subscriber whose subscription matches this publish (topic + events).
+    matching_subs = [sub for sub in cast_hub.subscriptions if _subscription_handles_event(sub, topic_name, event_type)]
+    if matching_subs:
+        for sub in matching_subs:
+            cast_hub.add_audit_log(
+                user=sub.get("subscriber", "unknown"),
+                topic=topic_name,
+                event_name=event_type,
+                event_data=audit_ctx,
+                direction="received",
+            )
+    else:
         user = topic_name if topic_name.startswith("user-") else topic_name
-    cast_hub.add_audit_log(user=user, topic=topic_name, event_name=event_type, event_data=context, direction="received")
-    
-    # Calculate HMAC signature
-    notification_json = json.dumps(notification)
+        cast_hub.add_audit_log(
+            user=user,
+            topic=topic_name,
+            event_name=event_type,
+            event_data=audit_ctx,
+            direction="received",
+        )
     
     # Publisher subscriber to suppress echo (from hub.source in event)
     publisher_subscriber = event.get("hub.source", "").strip() or None
@@ -1088,13 +1188,9 @@ async def _handle_publish_notification(notification: dict, path_topic: str = "")
     
     # Send to matching subscriptions
     for sub in cast_hub.subscriptions[:]:  # Copy to allow removal
-        # Check if subscription matches
-        subscribed_events = sub.get("events", "").lower()
-        if topic_name != sub.get("topic", ""):
+        if not _subscription_handles_event(sub, topic_name, event_type):
             continue
-        if event_type.lower() not in subscribed_events and "*" not in subscribed_events:
-            continue
-        
+
         secret = sub.get("secret", "")
         channel = sub.get("channel", "websub")
         
@@ -1112,8 +1208,11 @@ async def _handle_publish_notification(notification: dict, path_topic: str = "")
             if endpoint and endpoint in cast_hub.websocket_connections:
                 try:
                     websocket = cast_hub.websocket_connections[endpoint]
-                    # FastAPI WebSocket.send_text() is async - await it
-                    await websocket.send_text(notification_json)
+                    if ws_binary is not None:
+                        await websocket.send_text(ws_text)
+                        await websocket.send_bytes(ws_binary)
+                    else:
+                        await websocket.send_text(notification_json)
                     cast_hub.log(f"Sent WebSocket message to {sub.get('subscriber')} via endpoint {endpoint}")
                     # Track this endpoint as having received the message
                     sent_endpoints.add(endpoint)
@@ -1122,7 +1221,7 @@ async def _handle_publish_notification(notification: dict, path_topic: str = "")
                         user=sub.get("subscriber", "unknown"),
                         topic=topic_name,
                         event_name=event_type,
-                        event_data=context,
+                        event_data=audit_ctx,
                         direction="sent"
                     )
                 except Exception as e:
@@ -1159,7 +1258,7 @@ async def _handle_publish_notification(notification: dict, path_topic: str = "")
                         user=sub.get("subscriber", "unknown"),
                         topic=topic_name,
                         event_name=event_type,
-                        event_data=context,
+                        event_data=audit_ctx,
                         direction="sent"
                     )
                 except Exception as e:
@@ -1191,7 +1290,11 @@ async def _handle_publish_notification(notification: dict, path_topic: str = "")
                                 continue
                             try:
                                 websocket = cast_hub.websocket_connections[endpoint]
-                                await websocket.send_text(notification_json)
+                                if ws_binary is not None:
+                                    await websocket.send_text(ws_text)
+                                    await websocket.send_bytes(ws_binary)
+                                else:
+                                    await websocket.send_text(notification_json)
                                 cast_hub.log(f"Sent conference message to participant: {participant_topic}")
                                 # Track this endpoint as having received the message
                                 sent_endpoints.add(endpoint)
@@ -1200,7 +1303,7 @@ async def _handle_publish_notification(notification: dict, path_topic: str = "")
                                     user=sub.get("subscriber", "unknown"),
                                     topic=participant_topic,
                                     event_name=event_type,
-                                    event_data=context,
+                                    event_data=audit_ctx,
                                     direction="sent"
                                 )
                             except Exception as e:
