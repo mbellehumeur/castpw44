@@ -32,6 +32,8 @@ import urllib.request
 import hmac
 import hashlib
 import glob
+import re
+import secrets
 import xml.etree.ElementTree as ET
 from typing import Dict, List, Optional, Any
 from datetime import datetime
@@ -147,7 +149,7 @@ class CastHub:
         self.pending_admin_refresh_task = None  # Track pending refresh task (to cancel if needed)
         self.single_user_mode: bool = False  # When enabled, token endpoint always returns topic 'SINGLE-USER'
         self.pending_get_requests: Dict[str, Any] = {}  # request_id -> Queue for responses
-    
+
     def log(self, message: str):
         """Add a log message to the in-memory log buffer"""
         timestamp = datetime.now().isoformat()
@@ -574,7 +576,7 @@ class CastHub:
         self.page_loads = 0
         self.last_context.clear()
         self.pending_get_requests.clear()
-        
+
         self.log(f"Hub reset - all subscriptions, conferences, audit log cleared, and {len(disconnected_endpoints)} WebSocket(s) disconnected")
 
 
@@ -1180,9 +1182,18 @@ async def _handle_publish_notification(notification: dict, path_topic: str = "")
             direction="received",
         )
     
-    # Publisher subscriber to suppress echo (from hub.source in event)
-    publisher_subscriber = event.get("hub.source", "").strip() or None
-    
+    def _publisher_subscriber_name() -> Optional[str]:
+        hs = event.get("hub.source")
+        if hs is not None and str(hs).strip():
+            return str(hs).strip()
+        for key in ("subscriber", "publisher"):
+            v = notification.get(key)
+            if v is not None and str(v).strip():
+                return str(v).strip()
+        return None
+
+    publisher_subscriber = _publisher_subscriber_name()
+
     # Track endpoints that have already received the message to prevent duplicates
     sent_endpoints = set()
     
@@ -1200,8 +1211,11 @@ async def _handle_publish_notification(notification: dict, path_topic: str = "")
             hmac_sig = hmac.new(secret.encode(), notification_json.encode(), hashlib.sha256).hexdigest()
         
         if channel == "websocket":
-            # Skip publisher (suppress echo) when hub.source matches
-            if publisher_subscriber and sub.get("subscriber") == publisher_subscriber:
+            sub_name = (sub.get("subscriber") or "").strip()
+            if (
+                publisher_subscriber
+                and sub_name.lower() == publisher_subscriber.lower()
+            ):
                 continue
             # WebSocket delivery - async
             endpoint = sub.get("websocket_endpoint")
@@ -1237,8 +1251,11 @@ async def _handle_publish_notification(notification: dict, path_topic: str = "")
                 else:
                     cast_hub.log(f"WebSocket not bound for subscription: {sub.get('subscriber')}")
         else:
-            # Skip publisher (suppress echo) when hub.source matches
-            if publisher_subscriber and sub.get("subscriber") == publisher_subscriber:
+            sub_name = (sub.get("subscriber") or "").strip()
+            if (
+                publisher_subscriber
+                and sub_name.lower() == publisher_subscriber.lower()
+            ):
                 continue
             # WebSub delivery - HTTP POST to callback (can be async but using sync for now)
             callback = sub.get("callback")
@@ -1280,8 +1297,11 @@ async def _handle_publish_notification(notification: dict, path_topic: str = "")
                 # Find subscriptions for participant
                 for sub in cast_hub.subscriptions:
                     if sub.get("topic") == participant_topic and sub.get("channel") == "websocket":
-                        # Skip publisher (suppress echo) when hub.source matches
-                        if publisher_subscriber and sub.get("subscriber") == publisher_subscriber:
+                        sub_name = (sub.get("subscriber") or "").strip()
+                        if (
+                            publisher_subscriber
+                            and sub_name.lower() == publisher_subscriber.lower()
+                        ):
                             continue
                         endpoint = sub.get("websocket_endpoint")
                         if endpoint and endpoint in cast_hub.websocket_connections:
@@ -1681,6 +1701,19 @@ async def reset_hub(request: Request):
     return {"status": "reset", "message": f"All subscriptions, conferences, audit log cleared, and all WebSocket connections disconnected{mode_msg}"}
 
 
+_TOKEN_SUBSCRIBER_SUFFIX_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+
+
+def _token_subscriber_name(client_product_name: Optional[str]) -> str:
+    """subscriber_name for token response: sanitized product + '-' + 6 random uppercase A–Z / digits."""
+    raw = (client_product_name or "OHIF").strip()
+    base = re.sub(r"[^a-zA-Z0-9]+", "-", raw).strip("-") or "OHIF"
+    suffix = "".join(
+        secrets.choice(_TOKEN_SUBSCRIBER_SUFFIX_ALPHABET) for _ in range(6)
+    )
+    return f"{base}-{suffix}"
+
+
 @app.post("/oauth/token")
 async def post_oauth_token(request: Request):
     """Handle POST /oauth/token - OAuth token endpoint"""
@@ -1699,39 +1732,20 @@ async def post_oauth_token(request: Request):
         user_name = "SINGLE-USER"
         cast_hub.user_count += 1
         count = cast_hub.user_count
-
-        client_product_name = request_data.get("client_product_name")
-        if client_product_name:
-            subscriber_name = f"SINGLE-USER-{client_product_name}-{count}"
-        else:
-            subscriber_name = f"SINGLE-USER-APP-{count}"
+        subscriber_name = _token_subscriber_name(request_data.get("client_product_name"))
     # Check if topic is provided - if so, use it directly without incrementing count
     elif request_data.get("topic"):
         provided_topic = request_data.get("topic")
-        # Use the provided topic without incrementing user_count
         topic = provided_topic
         user_name = provided_topic
-        subscriber_name = provided_topic
         count = 0  # Not used when topic is provided, but set for response consistency
-        
-        # Check if client_product_name is provided for subscriber_name
-        client_product_name = request_data.get("client_product_name")
-        if client_product_name:
-            subscriber_name = client_product_name + "-" + user_name
+        subscriber_name = _token_subscriber_name(request_data.get("client_product_name"))
     else:
-        # Original logic: generate topic and increment count
-        # Check if client_product_Name is provided
-        client_product_name = request_data.get("client_product_name")
-        
-        # Use default user-{count} format
         cast_hub.user_count += 1
         count = cast_hub.user_count
-
         user_name = f"USER-{cast_hub.user_count}"
         topic = user_name
-        subscriber_name = user_name
-        if client_product_name:
-            subscriber_name = client_product_name + "-" + user_name
+        subscriber_name = _token_subscriber_name(request_data.get("client_product_name"))
     
     response = {
         "token_type": "Bearer",
