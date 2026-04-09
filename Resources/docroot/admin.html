@@ -113,6 +113,11 @@
         .audit-log table td {
             padding: 6px 12px;
         }
+        #conferencesTable table th,
+        #conferencesTable table td {
+            padding-top: 6px;
+            padding-bottom: 6px;
+        }
         th {
             background-color: #4a4a4a;
             font-weight: 600;
@@ -204,8 +209,8 @@
             border-left: 3px solid #ff9800;
         }
         .audit-log {
-            margin-top: 30px;
-            padding-top: 30px;
+            margin-top: 16px;
+            padding-top: 16px;
             border-top: 2px solid #555;
         }
         .filters {
@@ -767,7 +772,7 @@
                     tMin - 1500,
                     tMax + 3500
                 );
-                rows.push({ rep, recipientList, duplicateCount: group.length });
+                rows.push({ rep, recipientList });
             }
             rows.sort((a, b) => new Date(a.rep.timestamp) - new Date(b.rep.timestamp));
             return rows;
@@ -787,7 +792,7 @@
                 '<table><thead><tr><th>Timestamp</th><th>Topic</th><th>Event Name</th><th>Subscriber</th><th title="Subscribers that received this message (from correlated outbound log entries)">Delivered to</th></tr></thead><tbody>';
 
             displayRows.forEach((row, index) => {
-                const { rep, recipientList, duplicateCount } = row;
+                const { rep, recipientList } = row;
                 const date = new Date(rep.timestamp);
                 const timestamp =
                     date.toLocaleString() + '.' + date.getMilliseconds().toString().padStart(3, '0');
@@ -800,16 +805,11 @@
                     recipientList.length > 0
                         ? escapeHtml(recipientList.join(', '))
                         : '<span class="delivered-to-none">\u2014</span>';
-                const subCell =
-                    duplicateCount > 1
-                        ? `${escapeHtml(rep.user || 'N/A')} <span class="duplicate-badge">(+${duplicateCount - 1} same event)</span>`
-                        : escapeHtml(rep.user || 'N/A');
-
                 html += `<tr class="audit-row-received">
                      <td class="timestamp">${escapeHtml(timestamp)}</td>
                     <td class="topic">${escapeHtml(rep.topic || 'N/A')}</td>
                     <td><span class="event-name" onclick="toggleEventDetails(${index})" title="${escapeAttr(hoverText)}">${escapeHtml(rep.event_name || 'N/A')}</span></td>
-                    <td>${subCell}</td>
+                    <td>${escapeHtml(rep.user || 'N/A')}</td>
                     <td class="delivered-to" title="${escapeAttr(hoverText)}">${deliveredCell}</td>
 
                 </tr>
