@@ -810,7 +810,7 @@ async def get_hub_status_json():
 
     return {
         "total_subscriptions": len(subscriptions),
-        "total_websockets": len(cast_hub.websocket_connections),
+        "total_authentications": cast_hub.user_count,
         "total_topics": len(set(sub.get("topic") for sub in subscriptions if sub.get("topic"))),
         "total_messages": len(cast_hub.audit_log),
         "total_admin_clients": len(cast_hub.admin_websockets),
@@ -1738,7 +1738,8 @@ async def post_oauth_token(request: Request):
         provided_topic = request_data.get("topic")
         topic = provided_topic
         user_name = provided_topic
-        count = 0  # Not used when topic is provided, but set for response consistency
+        cast_hub.user_count += 1
+        count = cast_hub.user_count
         subscriber_name = _token_subscriber_name(request_data.get("client_product_name"))
     else:
         cast_hub.user_count += 1

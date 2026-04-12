@@ -280,7 +280,6 @@
         .audit-log .delivered-to {
             max-width: 280px;
             word-break: break-word;
-            font-size: 13px;
         }
         .delivered-to-none {
             color: #888;
@@ -404,12 +403,12 @@
 
         <div class="stats">
             <div class="stat-card">
-                <h3>Subscriptions</h3>
-                <div class="value" id="totalSubscriptions">-</div>
+                <h3>Authentications</h3>
+                <div class="value" id="totalAuthentications" title="OAuth/token user counter (USER-n assignments since last hub reset)">-</div>
             </div>
             <div class="stat-card">
-                <h3>WebSockets</h3>
-                <div class="value" id="totalWebsockets">-</div>
+                <h3>Subscriptions</h3>
+                <div class="value" id="totalSubscriptions">-</div>
             </div>
             <div class="stat-card">
                 <h3>Conferences</h3>
@@ -426,7 +425,6 @@
 
         <h2>Conferences</h2>
         <div id="conferencesTable"></div>
-
         <div class="audit-log">
             <h2>
                 Message Log
@@ -473,7 +471,7 @@
                 const data = await response.json();
                 
                 document.getElementById('totalSubscriptions').textContent = data.total_subscriptions || 0;
-                document.getElementById('totalWebsockets').textContent = data.total_websockets || 0;
+                document.getElementById('totalAuthentications').textContent = data.total_authentications ?? 0;
                 document.getElementById('totalMessages').textContent = data.total_messages || 0;
 
                 // Toggle single-user mode badge
