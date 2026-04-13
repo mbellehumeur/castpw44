@@ -4,7 +4,7 @@ Standalone Cast Hub implementation.
 This is a complete, standalone implementation that doesn't depend on WebServer.py.
 Uses FastAPI for HTTP server and WebSocket support.
 
-Run with: python cast_hub.py
+Run with: python app.py
 
 Requirements:
     pip install fastapi uvicorn
@@ -27,7 +27,6 @@ import asyncio
 import base64
 import copy
 import socket
-import urllib.parse
 import urllib.request
 import hmac
 import hashlib
@@ -1108,6 +1107,8 @@ async def get_hub_topic(topic: str, request: Request):
         if username and secret:
             cast_hub.user_count += 1
             topic_id = f"user-{cast_hub.user_count}"
+            # Push admin refresh so Authentications counter updates immediately.
+            await cast_hub.send_admin_refresh_command()
             return {"topic": topic_id}
         else:
             raise HTTPException(status_code=400, detail="Missing credentials")
@@ -1758,6 +1759,8 @@ async def post_oauth_token(request: Request):
         "user_name": user_name,
         "subscriber_name": subscriber_name
     }
+    # Push admin refresh so Authentications counter updates immediately.
+    await cast_hub.send_admin_refresh_command()
     return response
 
 
